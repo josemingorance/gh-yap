@@ -622,7 +622,7 @@ cmd_poll() {
   done <<EOF
 $TEXT_LINES
 EOF
-  [ "$n" -ge 2 ] && [ "$n" -le 4 ] || die "$(t poll_usage)"
+  if [ "$n" -lt 2 ] || [ "$n" -gt 4 ]; then die "$(t poll_usage)"; fi
   check_agent_quota
 
   if [ "$DRY_RUN" = 1 ]; then dry_run_preview "📊 $question
@@ -644,7 +644,7 @@ cmd_vote() {
   count="$(gh api "repos/$REPO/issues/$n" --jq "$JQ_LIB"'if is_poll then (poll_opts | length) else 0 end')"
   [ "$count" -gt 0 ] || die "$(t not_poll "#$n")"
   case "$k" in ''|*[!0-9]*) die "$(t bad_option "$count")" ;; esac
-  [ "$k" -ge 1 ] && [ "$k" -le "$count" ] || die "$(t bad_option "$count")"
+  if [ "$k" -lt 1 ] || [ "$k" -gt "$count" ]; then die "$(t bad_option "$count")"; fi
 
   load_me
   # one vote per person: drop any previous poll reaction of ours, then add the new one
