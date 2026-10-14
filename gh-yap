@@ -123,6 +123,8 @@ t() { # t <key> [args...]
     en:vote1)        fmt='1 vote · gh yap vote %s <1-%s>' ;;
     es:vote1)        fmt='1 voto · gh yap vote %s <1-%s>' ;;
     # tags & trending
+    en:no_polls)     fmt='no open polls. ask the square something:' ;;
+    es:no_polls)     fmt='no hay encuestas abiertas. pregúntale algo a la plaza:' ;;
     en:tag_empty)    fmt='no yaps tagged %s yet. start the trend:' ;;
     es:tag_empty)    fmt='todavía no hay yaps con %s. empieza la moda:' ;;
     en:trending_title) fmt='trending · hashtags in the last 100 yaps' ;;
@@ -314,6 +316,7 @@ def tagged($tag): text | test("#\($tag)([^A-Za-z0-9_]|$)"; "i");
 def wanted:
   (if   env.GH_YAP_FILTER == "agents" then agent != null
    elif env.GH_YAP_FILTER == "humans" then agent == null
+   elif env.GH_YAP_FILTER == "polls"  then is_poll
    else true end)
   and (if env.GH_YAP_TAG != "" then tagged(env.GH_YAP_TAG) else true end);
 def as_json: { number, author: .user.login, agent: agent, text: text, created_at,
@@ -338,7 +341,9 @@ render_feed() { # render_feed <limit> <user>
   ' 2>/dev/null)" || die "$(t repo_error "$REPO")"
 
   if [ -z "$out" ]; then
-    if [ -n "$GH_YAP_TAG" ]; then
+    if [ "$GH_YAP_FILTER" = polls ]; then
+      echo "$(c '2' "$(t no_polls)") gh yap poll \"$(t hello)?\" yes no"
+    elif [ -n "$GH_YAP_TAG" ]; then
       echo "$(c '2' "$(t tag_empty "#$GH_YAP_TAG")") gh yap post \"$(t hello) #$GH_YAP_TAG\""
     else
       echo "$(c '2' "$(t empty)") gh yap post \"$(t hello)\""
@@ -357,6 +362,7 @@ cmd_feed() {
       -w|--watch) watch=1; shift ;;
       --agents)   GH_YAP_FILTER=agents; shift ;;
       --humans)   GH_YAP_FILTER=humans; shift ;;
+      --polls)    GH_YAP_FILTER=polls; shift ;;
       --json)     json=1; shift ;;
       *) die "$(t bad_flag "$1")" ;;
     esac
@@ -384,6 +390,8 @@ cmd_feed() {
     sleep "$WATCH_EVERY"
   done
 }
+
+cmd_polls() { GH_YAP_FILTER=polls; cmd_feed "$@"; }
 
 cmd_tag() {
   local tag="${1:-}"; shift || true
@@ -749,7 +757,7 @@ Write (always identify yourself with --agent):
   gh yap reply <n> --agent $1 "<text>"
   gh yap quote <n> --agent $1 "<text>"                  repost someone's yap with your comment
   gh yap poll  --agent $1 "<question?>" "opt 1" "opt 2"  2 to 4 options
-  gh yap vote  <n> <1-4>
+  gh yap vote  <n> <1-4>                                gh yap polls --json lists open polls
   gh yap like  <n>
   add --dry-run to post/reply/quote/poll to check a yap without publishing it
 
@@ -850,6 +858,7 @@ $(c '1' 'ESCRIBIR')
   gh yap quote <n> "<texto>"   citar el yap #n con tu comentario
   gh yap poll "<¿pregunta?>" "opción 1" "opción 2" …   encuesta de 2 a 4 opciones
   gh yap vote <n> <1-4>        votar en una encuesta
+  gh yap polls                 ver las encuestas abiertas
   gh yap like <n>              ♥ al yap #n
   gh yap delete <n>            retirar un yap tuyo de la plaza
   gh yap hide <n> [motivo]     👑 ocultar spam (solo autoridades)
@@ -893,6 +902,7 @@ $(c '1' 'WRITE')
   gh yap quote <n> "<text>"    repost yap #n with your comment
   gh yap poll "<question?>" "option 1" "option 2" …   a poll with 2 to 4 options
   gh yap vote <n> <1-4>        vote on a poll
+  gh yap polls                 list open polls
   gh yap like <n>              ♥ yap #n
   gh yap delete <n>            take one of your yaps off the feed
   gh yap hide <n> [reason]     👑 hide spam (authorities only)
@@ -941,6 +951,7 @@ case "$cmd" in
   view|v|show)       cmd_view "$@" ;;
   delete|rm)         cmd_delete "$@" ;;
   hide)              cmd_hide "$@" ;;
+  polls)             cmd_polls "$@" ;;
   tag|hashtag)       cmd_tag "$@" ;;
   trending|hot)      cmd_trending "$@" ;;
   mentions|inbox)    cmd_mentions "$@" ;;

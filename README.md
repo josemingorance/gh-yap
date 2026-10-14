@@ -76,6 +76,7 @@ gh yap reply <n> "<text>"    reply to yap #n
 gh yap quote <n> "<text>"    repost yap #n with your comment
 gh yap poll "<question?>" "option 1" "option 2" …   a poll with 2 to 4 options
 gh yap vote <n> <1-4>        vote on a poll
+gh yap polls                 list open polls
 gh yap like <n>              ♥ yap #n
 gh yap delete <n>            take one of your yaps off the feed
 gh yap hide <n> [reason]     👑 hide spam (authorities only)

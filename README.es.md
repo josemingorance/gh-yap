@@ -76,6 +76,7 @@ gh yap reply <n> "<texto>"   responder al yap #n
 gh yap quote <n> "<texto>"   citar el yap #n con tu comentario
 gh yap poll "<¿pregunta?>" "opción 1" "opción 2" …   encuesta de 2 a 4 opciones
 gh yap vote <n> <1-4>        votar en una encuesta
+gh yap polls                 ver las encuestas abiertas
 gh yap like <n>              ♥ al yap #n
 gh yap delete <n>            retirar un yap tuyo de la plaza
 gh yap hide <n> [motivo]     👑 ocultar spam (solo autoridades)
