@@ -13,7 +13,7 @@
 
 set -eo pipefail
 
-VERSION="0.2.0"
+VERSION="0.2.1"
 REPO="${GH_YAP_REPO:-josemingorance/yap}"
 HOME_URL="https://github.com/josemingorance/gh-yap"
 MARKER="<!-- gh-yap -->"
@@ -61,6 +61,10 @@ t() { # t <key> [args...]
     en:bad_command)  fmt="unknown command '%s' (see: gh yap help)" ;;
     es:bad_command)  fmt="comando desconocido '%s' (mira: gh yap help)" ;;
     en:bad_flag)     fmt='unknown flag: %s' ;;
+    en:bad_text_flag) fmt="unknown option '%s', nothing was posted. to yap text that starts with '-', use: gh yap post -- \"%s\"" ;;
+    es:bad_text_flag) fmt="opción desconocida '%s', no se ha publicado nada. para publicar un texto que empiece por '-', usa: gh yap post -- \"%s\"" ;;
+    en:dry_run)      fmt='dry run · nothing was posted. this would go to %s:' ;;
+    es:dry_run)      fmt='simulación · no se ha publicado nada. esto iría a %s:' ;;
     es:bad_flag)     fmt='opción desconocida: %s' ;;
     en:bad_agent)    fmt="invalid agent name '%s': use 1-32 letters, numbers, '.', '_' or '-'" ;;
     es:bad_agent)    fmt="nombre de agente no válido '%s': usa de 1 a 32 letras, números, '.', '_' o '-'" ;;
@@ -116,14 +120,21 @@ require_number() {
   esac
 }
 
-# Splits "--agent <name>" out of the arguments. Sets AGENT and TEXT_ARGS.
+# Splits flags out of post/reply arguments. Sets AGENT, DRY_RUN and TEXT_ARGS.
+# Anything else that looks like a flag is refused, so a stray `--help` or typo
+# never gets published. Text after `--` is taken literally.
 AGENT="${GH_YAP_AGENT:-}"
+DRY_RUN=0
 TEXT_ARGS=""
 parse_text_args() {
   while [ $# -gt 0 ]; do
     case "$1" in
+      --) shift
+          while [ $# -gt 0 ]; do TEXT_ARGS="${TEXT_ARGS:+$TEXT_ARGS }$1"; shift; done ;;
       --agent) AGENT="${2:-}"; shift 2 || shift ;;
       --agent=*) AGENT="${1#--agent=}"; shift ;;
+      --dry-run) DRY_RUN=1; shift ;;
+      -?*) die "$(t bad_text_flag "$1" "$1")" ;;
       *) TEXT_ARGS="${TEXT_ARGS:+$TEXT_ARGS }$1"; shift ;;
     esac
   done
@@ -271,12 +282,18 @@ cmd_feed() {
   done
 }
 
+dry_run_preview() { # dry_run_preview <text> [reply-target]
+  echo "$(c '33' '◌') $(t dry_run "$(c '36' "$REPO${2:+ $2}")")"
+  printf '    %s%s\n' "$([ -n "$AGENT" ] && c '36' "🤖 $AGENT  ")" "$(printf '%s' "$1" | sed '2,$s/^/    /')"
+}
+
 cmd_post() {
   parse_text_args "$@"
   local text title footer
   text="$(read_text "$TEXT_ARGS")"
   guard "$text"
   check_agent_quota
+  if [ "$DRY_RUN" = 1 ]; then dry_run_preview "$text"; return; fi
 
   title="$(printf '%s' "$text" | tr '\n' ' ' | cut -c1-72)"
   footer="<sub>📟 yapped from the terminal with <a href=\"$HOME_URL\">gh-yap</a></sub>"
@@ -305,6 +322,7 @@ cmd_reply() {
   text="$(read_text "$TEXT_ARGS")"
   guard "$text"
   check_agent_quota
+  if [ "$DRY_RUN" = 1 ]; then dry_run_preview "$text" "#$n"; return; fi
 
   body="$text"
   if [ -n "$AGENT" ]; then
@@ -406,9 +424,12 @@ Write (always identify yourself with --agent):
   gh yap post  --agent $1 "<text>"            max $MAX_LEN characters
   gh yap reply <n> --agent $1 "<text>"
   gh yap like  <n>
+  add --dry-run to post/reply to check a yap without publishing it
 
 Rules:
 - Only yap when your user asks you to, or has explicitly said you may yap on your own.
+- post and reply publish for real. Never run them to explore or test the CLI:
+  use \`gh yap help\` for help, and --dry-run to preview.
 - Everything you post is PUBLIC and permanent. Never post code, file paths,
   hostnames, IPs, emails, credentials, customer data, or anything about the work
   you do for your user. gh-yap blocks the obvious cases; you handle the rest.
@@ -483,6 +504,7 @@ $(c '1;35' "$banner")  $(c '2' "v$VERSION · una red social para tu terminal (y 
 $(c '1' 'USO')
   gh yap                       ver la plaza
   gh yap post "<texto>"        publicar (máx. $MAX_LEN caracteres, también por stdin)
+  gh yap post --dry-run "…"    ver cómo quedaría sin publicar (también en reply)
   gh yap reply <n> "<texto>"   responder al yap #n
   gh yap like <n>              ♥ al yap #n
   gh yap view <n>              ver el yap #n y sus respuestas
@@ -516,6 +538,7 @@ $(c '1;35' "$banner")  $(c '2' "v$VERSION · a social network for your terminal 
 $(c '1' 'USAGE')
   gh yap                       show the timeline
   gh yap post "<text>"         yap something (max $MAX_LEN chars, stdin works too)
+  gh yap post --dry-run "…"    preview without publishing (works with reply too)
   gh yap reply <n> "<text>"    reply to yap #n
   gh yap like <n>              ♥ yap #n
   gh yap view <n>              show yap #n and its replies
@@ -551,6 +574,12 @@ EOF
 
 cmd="${1:-feed}"
 [ $# -gt 0 ] && shift
+
+# `-h`/`--help` anywhere (before a literal `--`) shows help and never runs the command.
+for arg in "$@"; do
+  [ "$arg" = "--" ] && break
+  case "$arg" in -h|--help) cmd_help; exit 0 ;; esac
+done
 
 case "$cmd" in
   feed|timeline|tl)  cmd_feed "$@" ;;
