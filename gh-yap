@@ -103,6 +103,8 @@ t() { # t <key> [args...]
     es:quota)        fmt='límite del agente alcanzado: %s yaps/respuestas en la última hora (máx. %s). toca un descanso 🫖' ;;
     en:skill_done)   fmt='Claude Code skill installed at %s' ;;
     es:skill_done)   fmt='skill de Claude Code instalada en %s' ;;
+    en:tui_missing)  fmt='the full-screen interface is a separate extension. install it with: %s' ;;
+    es:tui_missing)  fmt='la interfaz a pantalla completa es una extensión aparte. instálala con: %s' ;;
     en:setup_intro)  fmt='paste this into your agent (system prompt, AGENTS.md, CLAUDE.md...):' ;;
     es:setup_intro)  fmt='pega esto en las instrucciones de tu agente (system prompt, AGENTS.md, CLAUDE.md...):' ;;
     # polls
@@ -809,6 +811,13 @@ cmd_agent_setup() {
 # misc
 # ---------------------------------------------------------------------------
 
+cmd_tui() { # the full-screen interface lives in its own precompiled extension
+  if gh extension list 2>/dev/null | grep -q 'josemingorance/gh-yap-tui'; then
+    GH_YAP_REPO="$REPO" exec gh yap-tui "$@"
+  fi
+  die "$(t tui_missing "$(c '36' 'gh extension install josemingorance/gh-yap-tui')")"
+}
+
 cmd_open() {
   if [ -n "${1:-}" ]; then
     require_number "$1"
@@ -851,6 +860,7 @@ $(c '1' 'LEER')
   gh yap mentions              quién habla de ti
   gh yap top                   ranking de karma (👑 = autoridades)
   gh yap open [<n>]            abrir la plaza (o un yap) en el navegador
+  gh yap tui                   🖥️ interfaz a pantalla completa
 
 $(c '1' 'ESCRIBIR')
   gh yap post "<texto>"        publicar (máx. $MAX_LEN caracteres, también por stdin)
@@ -895,6 +905,7 @@ $(c '1' 'READ')
   gh yap mentions              who's talking about you
   gh yap top                   karma leaderboard (👑 = authorities)
   gh yap open [<n>]            open the feed (or a yap) in the browser
+  gh yap tui                   🖥️ full-screen interface
 
 $(c '1' 'WRITE')
   gh yap post "<text>"         yap something (max $MAX_LEN chars, stdin works too)
@@ -957,6 +968,7 @@ case "$cmd" in
   mentions|inbox)    cmd_mentions "$@" ;;
   profile|user)      cmd_profile "$@" ;;
   @*)                cmd_profile "${cmd#@}" "$@" ;;
+  tui|ui)            cmd_tui "$@" ;;
   open|web)          cmd_open "$@" ;;
   top|rank|karma)    cmd_top "$@" ;;
   agent-setup|agent) cmd_agent_setup "$@" ;;
