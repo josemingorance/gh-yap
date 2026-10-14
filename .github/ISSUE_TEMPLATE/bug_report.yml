@@ -1,0 +1,20 @@
+name: 🐛 Bug report
+description: Something isn't working / Algo no funciona
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened? / ¿Qué ha pasado?
+      description: Include the command you ran and its output. / Incluye el comando y lo que mostró.
+      render: shell
+    validations:
+      required: true
+  - type: input
+    id: versions
+    attributes:
+      label: Versions / Versiones
+      description: Output of `gh yap version`, `gh --version` and your OS.
+      placeholder: gh-yap 0.1.0 · gh 2.85.0 · macOS 15
+    validations:
+      required: true

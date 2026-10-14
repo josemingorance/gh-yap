@@ -1,0 +1,343 @@
+#!/usr/bin/env bash
+#
+# gh-yap — a tiny social network for your terminal, with GitHub as the backend.
+#
+#   posts   -> issues     (on $GH_YAP_REPO)
+#   replies -> comments
+#   likes   -> 👍 reactions
+#
+# Zero dependencies beyond `gh`. Works with the bash 3.2 that ships with macOS.
+#
+# shellcheck disable=SC2016,SC2059  # jq programs are single-quoted, i18n formats live in variables
+
+set -eo pipefail
+
+VERSION="0.1.0"
+REPO="${GH_YAP_REPO:-josemingorance/yap}"
+HOME_URL="https://github.com/josemingorance/gh-yap"
+MARKER="<!-- gh-yap -->"
+MAX_LEN=280
+WATCH_EVERY="${GH_YAP_WATCH_EVERY:-30}"
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  export GH_YAP_COLOR=1
+else
+  export GH_YAP_COLOR=0
+fi
+
+case "${GH_YAP_LANG:-${LC_ALL:-${LC_MESSAGES:-${LANG:-}}}}" in
+  es*) L=es ;;
+  *)   L=en ;;
+esac
+
+# ---------------------------------------------------------------------------
+# i18n
+# ---------------------------------------------------------------------------
+
+t() { # t <key> [args...]
+  local key="$1" fmt; shift
+  case "$L:$key" in
+    en:posted)      fmt='yapped %s' ;;
+    es:posted)      fmt='publicado %s' ;;
+    en:replied)     fmt='replied to %s' ;;
+    es:replied)     fmt='respondido a %s' ;;
+    en:liked)       fmt='liked %s' ;;
+    es:liked)       fmt='te gusta %s' ;;
+    en:empty)       fmt='the timeline is quiet... be the first:' ;;
+    es:empty)       fmt='la plaza está en silencio... rompe el hielo:' ;;
+    en:hello)       fmt='hello world' ;;
+    es:hello)       fmt='hola mundo' ;;
+    en:nothing)     fmt='nothing to yap about. usage: gh yap post "hello world"' ;;
+    es:nothing)     fmt='no hay nada que publicar. uso: gh yap post "hola mundo"' ;;
+    en:too_long)    fmt='too long: %s/%s chars. brevity is the soul of yap.' ;;
+    es:too_long)    fmt='demasiado largo: %s/%s caracteres. lo bueno, si breve, dos veces bueno.' ;;
+    en:bad_number)  fmt="expected a yap number, got '%s' (see: gh yap feed)" ;;
+    es:bad_number)  fmt="esperaba el número de un yap y llegó '%s' (mira: gh yap feed)" ;;
+    en:bad_command) fmt="unknown command '%s' (see: gh yap help)" ;;
+    es:bad_command) fmt="comando desconocido '%s' (mira: gh yap help)" ;;
+    en:bad_flag)    fmt='unknown flag: %s' ;;
+    es:bad_flag)    fmt='opción desconocida: %s' ;;
+    en:whoami)      fmt='you are %s, yapping on %s' ;;
+    es:whoami)      fmt='eres %s y publicas en %s' ;;
+    en:live)        fmt='live · refreshing every %ss · ctrl-c to quit' ;;
+    es:live)        fmt='en directo · se actualiza cada %ss · ctrl-c para salir' ;;
+    en:repo_error)  fmt="couldn't read %s. does it exist and have issues enabled?" ;;
+    es:repo_error)  fmt='no he podido leer %s. ¿existe y tiene los issues activados?' ;;
+    en:deleted)     fmt='%s removed from the feed' ;;
+    es:deleted)     fmt='%s retirado de la plaza' ;;
+    en:top_title)   fmt='top yappers · karma = likes received on the last 100 yaps' ;;
+    es:top_title)   fmt='los más queridos · karma = likes recibidos en los últimos 100 yaps' ;;
+    en:top_footer)  fmt='👑 = authority (top 3)' ;;
+    es:top_footer)  fmt='👑 = autoridad (top 3)' ;;
+    *)              fmt="$key" ;;
+  esac
+  printf "$fmt" "$@"
+}
+
+# ---------------------------------------------------------------------------
+# helpers
+# ---------------------------------------------------------------------------
+
+c() { # c <ansi-code> <text>
+  if [ "$GH_YAP_COLOR" = 1 ]; then printf '\033[%sm%s\033[0m' "$1" "$2"; else printf '%s' "$2"; fi
+}
+
+die() { echo "$(c '31' '✗') $*" >&2; exit 1; }
+ok()  { echo "$(c '32' '✓') $*"; }
+
+require_number() {
+  case "$1" in
+    ''|*[!0-9]*) die "$(t bad_number "${1:-}")" ;;
+  esac
+}
+
+read_text() { # text from args, or from stdin when piped
+  local text="$*"
+  if [ -z "$text" ] && [ ! -t 0 ]; then text="$(cat)"; fi
+  # trim surrounding whitespace
+  text="$(printf '%s' "$text" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+  [ -n "$text" ] || die "$(t nothing)"
+  local len
+  len="$(printf '%s' "$text" | wc -m | tr -d ' ')"
+  [ "$len" -le "$MAX_LEN" ] || die "$(t too_long "$len" "$MAX_LEN")"
+  printf '%s' "$text"
+}
+
+# jq prelude shared by every renderer (runs inside `gh api --jq`, no jq install needed)
+JQ_LIB='
+def c($code): if env.GH_YAP_COLOR == "1" then "\u001b[\($code)m\(.)\u001b[0m" else . end;
+def ago:
+  (now - fromdateiso8601) as $s
+  | if   $s < 60    then "now"
+    elif $s < 3600  then "\($s / 60    | floor)m"
+    elif $s < 86400 then "\($s / 3600  | floor)h"
+    else                 "\($s / 86400 | floor)d" end;
+def pretty:
+  if env.GH_YAP_COLOR == "1"
+  then gsub("(?<m>@[A-Za-z0-9-]+)"; "\u001b[35m\(.m)\u001b[0m")
+     | gsub("(?<t>#[A-Za-z0-9_]+)"; "\u001b[36m\(.t)\u001b[0m")
+  else . end;
+def text: (.body // "") | split("\n\n'"$MARKER"'")[0];
+def indent: gsub("\n"; "\n    ");
+def is_yap: (.pull_request | not) and ((.body // "") | contains("'"$MARKER"'"));
+'
+
+# ---------------------------------------------------------------------------
+# commands
+# ---------------------------------------------------------------------------
+
+render_feed() { # render_feed <limit> <user>
+  local query="repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100"
+  [ -n "$2" ] && query="$query&creator=$2"
+
+  local out
+  out="$(gh api "$query" --jq "$JQ_LIB"'
+    [ .[] | select(is_yap) ] | .[:'"$1"'] | reverse | .[]
+    | "\("#\(.number)" | c("2")) \("@\(.user.login)" | c("1;33")) \("· \(.created_at | ago)" | c("2"))\n"
+    + "    \(text | indent | pretty)\n"
+    + "    \("♥ \(.reactions["+1"])  💬 \(.comments)" | c("2"))\n"
+  ' 2>/dev/null)" || die "$(t repo_error "$REPO")"
+
+  if [ -z "$out" ]; then
+    echo "$(c '2' "$(t empty)") gh yap post \"$(t hello)\""
+  else
+    printf '%s\n\n' "$out"
+  fi
+}
+
+cmd_feed() {
+  local limit=20 user="" watch=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -n|--limit) limit="${2:-}"; shift 2 || shift ;;
+      -u|--user)  user="${2#@}";  shift 2 || shift ;;
+      -w|--watch) watch=1; shift ;;
+      *) die "$(t bad_flag "$1")" ;;
+    esac
+  done
+  require_number "$limit"
+  if [ "$user" = "me" ]; then user="$(gh api user --jq .login)"; fi
+
+  if [ "$watch" = 0 ]; then
+    render_feed "$limit" "$user"
+    return
+  fi
+
+  trap 'printf "\n"; exit 0' INT
+  while true; do
+    local frame
+    frame="$(render_feed "$limit" "$user")"
+    printf '\033[H\033[2J%s\n\n%s\n' "$frame" "$(c '2' "● $(t live "$WATCH_EVERY")")"
+    sleep "$WATCH_EVERY"
+  done
+}
+
+cmd_post() {
+  local text title
+  text="$(read_text "$@")"
+  title="$(printf '%s' "$text" | tr '\n' ' ' | cut -c1-72)"
+  local num
+  num="$(gh api "repos/$REPO/issues" \
+    -f title="$title" \
+    -f body="$text
+
+$MARKER
+<sub>📟 yapped from the terminal with <a href=\"$HOME_URL\">gh-yap</a></sub>" \
+    --jq '"#\(.number)"')"
+  ok "$(t posted "$(c '2' "$num")")"
+}
+
+cmd_reply() {
+  local n="${1:-}"; shift || true
+  require_number "$n"
+  local text
+  text="$(read_text "$@")"
+  gh api "repos/$REPO/issues/$n/comments" -f body="$text" --silent
+  ok "$(t replied "$(c '2' "#$n")")"
+}
+
+cmd_like() {
+  require_number "${1:-}"
+  gh api "repos/$REPO/issues/$1/reactions" -f content='+1' --silent
+  ok "$(c '31' '♥') $(t liked "#$1")"
+}
+
+cmd_delete() { # closing the issue hides it from the feed; authors may close their own issues
+  require_number "${1:-}"
+  gh api -X PATCH "repos/$REPO/issues/$1" -f state=closed --silent
+  ok "$(t deleted "#$1")"
+}
+
+cmd_view() {
+  local n="${1:-}"
+  require_number "$n"
+  gh api "repos/$REPO/issues/$n" --jq "$JQ_LIB"'
+    "\("@\(.user.login)" | c("1;33")) \("· \(.created_at | ago) · #\(.number)" | c("2"))\n"
+    + "    \(text | indent | pretty)\n"
+    + "    \("♥ \(.reactions["+1"])  💬 \(.comments)" | c("2"))"
+  '
+  gh api "repos/$REPO/issues/$n/comments?per_page=100" --jq "$JQ_LIB"'
+    .[] | "  \("└─" | c("2")) \("@\(.user.login)" | c("33")) \("· \(.created_at | ago)" | c("2"))\n"
+        + "       \((.body // "") | gsub("\n"; "\n       ") | pretty)"
+  '
+  echo
+}
+
+cmd_top() {
+  local out
+  out="$(gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB"'
+    def pad($n): . + (if ($n - length) > 0 then " " * ($n - length) else "" end);
+    [ .[] | select(is_yap) ]
+    | group_by(.user.login)
+    | map({ login: .[0].user.login, karma: (map(.reactions["+1"]) | add), yaps: length })
+    | sort_by(-.karma, -.yaps) | .[:10] | to_entries[]
+    | (if .key < 3 then "👑 " else "\(.key + 1)." | pad(3) end) as $rank
+    | (if .key < 3 then "1;33" else "33" end) as $color
+    | "  \($rank) \("@\(.value.login)" | pad(22) | c($color))"
+      + " \("♥ \(.value.karma)" | pad(6) | c("31")) \("· \(.value.yaps) yaps" | c("2"))"
+  ' 2>/dev/null)" || die "$(t repo_error "$REPO")"
+
+  if [ -z "$out" ]; then
+    echo "$(c '2' "$(t empty)") gh yap post \"$(t hello)\""
+    return
+  fi
+  printf '%s\n\n%s\n\n%s\n' "$(c '1' "$(t top_title)")" "$out" "$(c '2' "$(t top_footer)")"
+}
+
+cmd_open() {
+  if [ -n "${1:-}" ]; then
+    require_number "$1"
+    gh browse "$1" --repo "$REPO"
+  else
+    gh issue list --web --repo "$REPO"
+  fi
+}
+
+cmd_whoami() {
+  local login
+  login="$(gh api user --jq .login)"
+  t whoami "$(c '1;33' "@$login")" "$(c '36' "$REPO")"
+  echo
+}
+
+cmd_help() {
+  local banner='
+   __ _| |__    _   _  __ _ _ __
+  / _` | '"'"'_ \  | | | |/ _` | '"'"'_ \
+ | (_| | | | | | |_| | (_| | |_) |
+  \__, |_| |_|  \__, |\__,_| .__/
+  |___/         |___/      |_|   '
+
+  if [ "$L" = es ]; then
+    cat <<EOF
+$(c '1;35' "$banner")  $(c '2' "v$VERSION · una red social para tu terminal")
+
+$(c '1' 'USO')
+  gh yap                       ver la plaza
+  gh yap post "<texto>"        publicar (máx. $MAX_LEN caracteres, también por stdin)
+  gh yap reply <n> "<texto>"   responder al yap #n
+  gh yap like <n>              ♥ al yap #n
+  gh yap view <n>              ver el yap #n y sus respuestas
+  gh yap delete <n>            retirar un yap tuyo de la plaza
+  gh yap feed [-n 50] [-u me]  timeline, opcionalmente de un autor
+  gh yap feed --watch          timeline en directo
+  gh yap open [<n>]            abrir la plaza (o un yap) en el navegador
+  gh yap top                   ranking de karma (👑 = autoridades)
+  gh yap whoami                quién eres y dónde publicas
+
+$(c '1' 'VARIABLES')
+  GH_YAP_REPO   repo que hace de plaza (por defecto: josemingorance/yap)
+  GH_YAP_LANG   idioma: es | en
+  NO_COLOR      sin colores
+
+$(c '2' 'los yaps son issues públicos en') $(c '36' "$REPO")$(c '2' '. sé buena gente.')
+EOF
+  else
+    cat <<EOF
+$(c '1;35' "$banner")  $(c '2' "v$VERSION · a social network for your terminal")
+
+$(c '1' 'USAGE')
+  gh yap                       show the timeline
+  gh yap post "<text>"         yap something (max $MAX_LEN chars, stdin works too)
+  gh yap reply <n> "<text>"    reply to yap #n
+  gh yap like <n>              ♥ yap #n
+  gh yap view <n>              show yap #n and its replies
+  gh yap delete <n>            take one of your yaps off the feed
+  gh yap feed [-n 50] [-u me]  timeline, optionally filtered by author
+  gh yap feed --watch          live timeline
+  gh yap open [<n>]            open the feed (or a yap) in the browser
+  gh yap top                   karma leaderboard (👑 = authorities)
+  gh yap whoami                who you are and where you're yapping
+
+$(c '1' 'ENV')
+  GH_YAP_REPO   repo backing the network (default: josemingorance/yap)
+  GH_YAP_LANG   language: en | es
+  NO_COLOR      disable colors
+
+$(c '2' 'yaps are public GitHub issues on') $(c '36' "$REPO")$(c '2' '. be nice.')
+EOF
+  fi
+}
+
+# ---------------------------------------------------------------------------
+# main
+# ---------------------------------------------------------------------------
+
+cmd="${1:-feed}"
+[ $# -gt 0 ] && shift
+
+case "$cmd" in
+  feed|timeline|tl)  cmd_feed "$@" ;;
+  post|p|say)        cmd_post "$@" ;;
+  reply|r)           cmd_reply "$@" ;;
+  like|heart|l)      cmd_like "$@" ;;
+  view|v|show)       cmd_view "$@" ;;
+  delete|rm)         cmd_delete "$@" ;;
+  open|web)          cmd_open "$@" ;;
+  top|rank|karma)    cmd_top ;;
+  whoami)            cmd_whoami ;;
+  help|-h|--help)    cmd_help ;;
+  version|-v|--version) echo "gh-yap $VERSION" ;;
+  -*)                cmd_feed "$cmd" "$@" ;;
+  *)                 die "$(t bad_command "$cmd")" ;;
+esac

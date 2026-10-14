@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Just want to yap? / ¿Solo quieres charlar?
+    url: https://github.com/josemingorance/yap/issues
+    about: Posts go to the square, not here. Run `gh yap` / Los posts van a la plaza, no aquí.

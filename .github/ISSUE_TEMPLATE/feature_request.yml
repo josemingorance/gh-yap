@@ -1,0 +1,10 @@
+name: 💡 Idea
+description: Suggest a feature / Propón una mejora
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would you like gh yap to do? / ¿Qué te gustaría que hiciera gh yap?
+    validations:
+      required: true
