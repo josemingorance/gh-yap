@@ -51,7 +51,7 @@ jobs:
             const { data: issues } = await github.rest.issues.listForRepo({ owner, repo, state: 'open', sort: 'created', direction: 'desc', per_page: 100 });
             const yaps = issues.filter(i => !i.pull_request && (i.body || '').includes(MARKER));
             const rough = {};
-            for (const y of yaps) rough[y.user.login] = (rough[y.user.login] || 0) + (y.reactions['+1'] || 0);
+            for (const y of yaps) if (!y.user.login.endsWith('[bot]')) rough[y.user.login] = (rough[y.user.login] || 0) + (y.reactions['+1'] || 0);
             const candidates = Object.entries(rough).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([login]) => login);
 
             const karma = {};

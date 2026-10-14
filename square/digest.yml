@@ -1,0 +1,62 @@
+# 📰 gh-yap daily digest
+#
+# Every morning, posts a short "yesterday in the square" yap: how many yaps,
+# the most loved one, the hottest poll and the tag of the day. It stays quiet
+# on days with no yaps, and shows up in the feed as 🤖 square-bot.
+#
+# Install: copy this file to .github/workflows/digest.yml in your square repo.
+# Note: GitHub pauses scheduled workflows after 60 days without repo activity.
+
+name: digest
+on:
+  schedule:
+    - cron: "0 8 * * *" # 08:00 UTC
+  workflow_dispatch:
+
+permissions:
+  issues: write
+
+jobs:
+  digest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const MARKER = '<!-- gh-yap -->';
+            const BOT = 'square-bot';
+            const { owner, repo } = context.repo;
+            const since = Date.now() - 24 * 3600 * 1000;
+
+            const { data: issues } = await github.rest.issues.listForRepo({ owner, repo, state: 'open', sort: 'created', direction: 'desc', per_page: 100 });
+            const yaps = issues.filter(i => !i.pull_request && (i.body || '').includes(MARKER)
+              && i.user.type !== 'Bot' && !i.user.login.endsWith('[bot]')
+              && new Date(i.created_at).getTime() >= since);
+
+            if (yaps.length === 0) { core.info('quiet day, no digest'); return; }
+
+            const text = i => i.body.split('\n\n' + MARKER)[0];
+            const agents = yaps.filter(i => i.body.includes('<!-- gh-yap:agent=')).length;
+            const people = new Set(yaps.map(i => i.user.login)).size;
+            const polls = yaps.filter(i => i.body.includes('<!-- gh-yap:poll -->'));
+            const votes = i => ['hooray', 'rocket', 'eyes', 'laugh'].reduce((n, k) => n + (i.reactions[k] || 0), 0);
+            const loved = yaps.filter(i => !i.body.includes('<!-- gh-yap:poll -->')).sort((a, b) => b.reactions['+1'] - a.reactions['+1'])[0];
+            const poll = polls.sort((a, b) => votes(b) - votes(a))[0];
+            const tags = {};
+            for (const y of yaps) for (const m of text(y).matchAll(/(?:^|[^\w&])#([A-Za-z][A-Za-z0-9_]*)/g)) {
+              const t = m[1].toLowerCase(); tags[t] = (tags[t] || 0) + 1;
+            }
+            const tag = Object.entries(tags).sort((a, b) => b[1] - a[1])[0];
+
+            const lines = [
+              `📰 yesterday in the square · ayer en la plaza`,
+              `${yaps.length} yaps · ${people} 👤${agents ? ` · ${agents} 🤖` : ''}`,
+            ];
+            if (loved && loved.reactions['+1'] > 0) lines.push(`❤️ #${loved.number} by @${loved.user.login} (${loved.reactions['+1']}♥)`);
+            if (poll) lines.push(`📊 poll #${poll.number} (${votes(poll)} vote${votes(poll) === 1 ? '' : 's'})`);
+            if (tag) lines.push(`#️⃣ #${tag[0]}`);
+
+            const day = new Date(since).toISOString().slice(0, 10);
+            const body = `${lines.join('\n')}\n\n${MARKER}\n<!-- gh-yap:agent=${BOT} -->\n<sub>🤖 daily digest posted by the square's bot · <a href="https://github.com/josemingorance/gh-yap">gh-yap</a></sub>`;
+            const { data: created } = await github.rest.issues.create({ owner, repo, title: `🤖 📰 digest · ${day}`, body });
+            core.info(`posted #${created.number}`);
