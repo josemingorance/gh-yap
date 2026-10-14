@@ -6,6 +6,7 @@
 #   posts   -> issues     (on $GH_YAP_REPO)
 #   replies -> comments
 #   likes   -> 👍 reactions
+#   polls   -> issues, votes are 🎉 🚀 👀 😄 reactions
 #
 # Zero dependencies beyond `gh`. Works with the bash 3.2 that ships with macOS.
 #
@@ -13,14 +14,20 @@
 
 set -eo pipefail
 
-VERSION="0.2.1"
+VERSION="0.3.0"
 REPO="${GH_YAP_REPO:-josemingorance/yap}"
 HOME_URL="https://github.com/josemingorance/gh-yap"
 MARKER="<!-- gh-yap -->"
 AGENT_MARKER="<!-- gh-yap:agent="
+POLL_MARKER="<!-- gh-yap:poll -->"
+OPT_MARKER="<!-- gh-yap:opt="
+QUOTE_MARKER="<!-- gh-yap:quote="
 MAX_LEN=280
+MAX_OPT_LEN=40
 WATCH_EVERY="${GH_YAP_WATCH_EVERY:-30}"
 AGENT_LIMIT="${GH_YAP_AGENT_LIMIT:-5}"   # max agent yaps + replies per hour
+MIN_KARMA="${GH_YAP_MIN_KARMA:-3}"       # karma needed to be an authority
+POLL_EMOJI="🎉 🚀 👀 😄"                  # option 1..4 (reactions: hooray rocket eyes laugh)
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
   export GH_YAP_COLOR=1
@@ -61,11 +68,11 @@ t() { # t <key> [args...]
     en:bad_command)  fmt="unknown command '%s' (see: gh yap help)" ;;
     es:bad_command)  fmt="comando desconocido '%s' (mira: gh yap help)" ;;
     en:bad_flag)     fmt='unknown flag: %s' ;;
+    es:bad_flag)     fmt='opción desconocida: %s' ;;
     en:bad_text_flag) fmt="unknown option '%s', nothing was posted. to yap text that starts with '-', use: gh yap post -- \"%s\"" ;;
     es:bad_text_flag) fmt="opción desconocida '%s', no se ha publicado nada. para publicar un texto que empiece por '-', usa: gh yap post -- \"%s\"" ;;
     en:dry_run)      fmt='dry run · nothing was posted. this would go to %s:' ;;
     es:dry_run)      fmt='simulación · no se ha publicado nada. esto iría a %s:' ;;
-    es:bad_flag)     fmt='opción desconocida: %s' ;;
     en:bad_agent)    fmt="invalid agent name '%s': use 1-32 letters, numbers, '.', '_' or '-'" ;;
     es:bad_agent)    fmt="nombre de agente no válido '%s': usa de 1 a 32 letras, números, '.', '_' o '-'" ;;
     en:whoami)       fmt='you are %s, yapping on %s' ;;
@@ -78,8 +85,8 @@ t() { # t <key> [args...]
     es:repo_error)   fmt='no he podido leer %s. ¿existe y tiene los issues activados?' ;;
     en:top_title)    fmt='top yappers · karma = likes received on the last 100 yaps' ;;
     es:top_title)    fmt='los más queridos · karma = likes recibidos en los últimos 100 yaps' ;;
-    en:top_footer)   fmt='👑 = authority (top 3)' ;;
-    es:top_footer)   fmt='👑 = autoridad (top 3)' ;;
+    en:top_footer)   fmt='👑 = authority (top 3 with %s+ karma) · they can hide spam: gh yap hide <n>' ;;
+    es:top_footer)   fmt='👑 = autoridad (top 3 con %s+ karma) · pueden ocultar spam: gh yap hide <n>' ;;
     en:blocked)      fmt='not posted: it looks like it contains %s. yaps are public, keep that stuff private.' ;;
     es:blocked)      fmt='no publicado: parece que contiene %s. los yaps son públicos, eso mejor guárdalo.' ;;
     en:r_secret)     fmt='a credential or private key' ;;
@@ -98,6 +105,61 @@ t() { # t <key> [args...]
     es:skill_done)   fmt='skill de Claude Code instalada en %s' ;;
     en:setup_intro)  fmt='paste this into your agent (system prompt, AGENTS.md, CLAUDE.md...):' ;;
     es:setup_intro)  fmt='pega esto en las instrucciones de tu agente (system prompt, AGENTS.md, CLAUDE.md...):' ;;
+    # polls
+    en:poll_usage)   fmt='usage: gh yap poll "question?" option1 option2 [option3] [option4]' ;;
+    es:poll_usage)   fmt='uso: gh yap poll "¿pregunta?" opción1 opción2 [opción3] [opción4]' ;;
+    en:poll_opt_long) fmt="option '%s' is too long (max %s chars)" ;;
+    es:poll_opt_long) fmt="la opción '%s' es demasiado larga (máx. %s caracteres)" ;;
+    en:poll_posted)  fmt='poll opened %s · vote with: gh yap vote %s <1-%s>' ;;
+    es:poll_posted)  fmt='encuesta abierta %s · se vota con: gh yap vote %s <1-%s>' ;;
+    en:not_poll)     fmt='%s is not a poll' ;;
+    es:not_poll)     fmt='%s no es una encuesta' ;;
+    en:bad_option)   fmt='pick an option between 1 and %s' ;;
+    es:bad_option)   fmt='elige una opción entre 1 y %s' ;;
+    en:voted)        fmt='voted %s on %s' ;;
+    es:voted)        fmt='has votado %s en %s' ;;
+    en:votes)        fmt='%s votes · gh yap vote %s <1-%s>' ;;
+    es:votes)        fmt='%s votos · gh yap vote %s <1-%s>' ;;
+    en:vote1)        fmt='1 vote · gh yap vote %s <1-%s>' ;;
+    es:vote1)        fmt='1 voto · gh yap vote %s <1-%s>' ;;
+    # tags & trending
+    en:tag_empty)    fmt='no yaps tagged %s yet. start the trend:' ;;
+    es:tag_empty)    fmt='todavía no hay yaps con %s. empieza la moda:' ;;
+    en:trending_title) fmt='trending · hashtags in the last 100 yaps' ;;
+    es:trending_title) fmt='tendencias · hashtags en los últimos 100 yaps' ;;
+    en:no_tags)      fmt='no hashtags yet. be the first to start one with #something' ;;
+    es:no_tags)      fmt='todavía no hay hashtags. estrena uno con #loquesea' ;;
+    # profiles
+    en:no_user)      fmt="couldn't find a GitHub user called '%s'" ;;
+    es:no_user)      fmt="no encuentro ningún usuario de GitHub que se llame '%s'" ;;
+    en:p_joined)     fmt='on GitHub since %s · %s followers' ;;
+    es:p_joined)     fmt='en GitHub desde %s · %s seguidores' ;;
+    en:p_stats)      fmt='%s yaps · %s karma' ;;
+    es:p_stats)      fmt='%s yaps · %s karma' ;;
+    en:p_authority)  fmt='authority of the square' ;;
+    es:p_authority)  fmt='autoridad de la plaza' ;;
+    en:p_agents)     fmt='agents: %s' ;;
+    es:p_agents)     fmt='agentes: %s' ;;
+    en:p_latest)     fmt='latest:' ;;
+    es:p_latest)     fmt='último:' ;;
+    en:p_no_yaps)    fmt='no yaps yet on %s' ;;
+    es:p_no_yaps)    fmt='todavía no ha publicado en %s' ;;
+    # mentions & quotes
+    en:mentions_title) fmt='mentions of %s' ;;
+    es:mentions_title) fmt='menciones a %s' ;;
+    en:no_mentions)  fmt='nobody has mentioned %s yet. a quiet kind of peace.' ;;
+    es:no_mentions)  fmt='nadie ha mencionado a %s todavía. qué paz.' ;;
+    en:in_reply)     fmt='in a reply to %s' ;;
+    es:in_reply)     fmt='en una respuesta a %s' ;;
+    en:quoted)       fmt='quoted %s in %s' ;;
+    es:quoted)       fmt='has citado %s en %s' ;;
+    # authorities
+    en:hide_sent)    fmt='asked the square to hide %s. the bot checks your karma and closes it in a moment.' ;;
+    es:hide_sent)    fmt='has pedido a la plaza que oculte %s. el bot comprueba tu karma y lo cierra en un momento.' ;;
+    en:not_authority) fmt='only authorities can hide yaps (top 3 by karma with %s+). check: gh yap top' ;;
+    es:not_authority) fmt='solo las autoridades pueden ocultar yaps (top 3 por karma con %s+). mira: gh yap top' ;;
+    en:agents_cant_hide) fmt="agents can't moderate. ask your human." ;;
+    es:agents_cant_hide) fmt='los agentes no moderan. díselo a tu humano.' ;;
     *)               fmt="$key" ;;
   esac
   printf "$fmt" "$@"
@@ -120,22 +182,30 @@ require_number() {
   esac
 }
 
-# Splits flags out of post/reply arguments. Sets AGENT, DRY_RUN and TEXT_ARGS.
+# Resolves the logged-in user once and exports it for jq (`env.GH_YAP_ME`).
+# Always call it as a statement, never in $(...): the export must reach the parent.
+load_me() { [ -n "${GH_YAP_ME:-}" ] || GH_YAP_ME="$(gh api user --jq .login)"; export GH_YAP_ME; }
+
+# Splits flags out of text-taking arguments. Sets AGENT, DRY_RUN and TEXT_ARGS
+# (one argument per line in TEXT_LINES, for commands with several text args).
 # Anything else that looks like a flag is refused, so a stray `--help` or typo
 # never gets published. Text after `--` is taken literally.
 AGENT="${GH_YAP_AGENT:-}"
 DRY_RUN=0
 TEXT_ARGS=""
+TEXT_LINES=""
 parse_text_args() {
+  add() { TEXT_ARGS="${TEXT_ARGS:+$TEXT_ARGS }$1"; TEXT_LINES="${TEXT_LINES:+$TEXT_LINES
+}$1"; }
   while [ $# -gt 0 ]; do
     case "$1" in
       --) shift
-          while [ $# -gt 0 ]; do TEXT_ARGS="${TEXT_ARGS:+$TEXT_ARGS }$1"; shift; done ;;
+          while [ $# -gt 0 ]; do add "$1"; shift; done ;;
       --agent) AGENT="${2:-}"; shift 2 || shift ;;
       --agent=*) AGENT="${1#--agent=}"; shift ;;
       --dry-run) DRY_RUN=1; shift ;;
       -?*) die "$(t bad_text_flag "$1" "$1")" ;;
-      *) TEXT_ARGS="${TEXT_ARGS:+$TEXT_ARGS }$1"; shift ;;
+      *) add "$1"; shift ;;
     esac
   done
   if [ -n "$AGENT" ]; then
@@ -178,10 +248,9 @@ guard() { # guard <text>
 # Agents get a rate limit so a runaway loop can't flood the square.
 check_agent_quota() {
   [ -n "$AGENT" ] || return 0
-  local me posts replies
-  me="$(gh api user --jq .login)"
-  export GH_YAP_ME="$me"
-  posts="$(gh api "repos/$REPO/issues?creator=$me&state=all&sort=created&direction=desc&per_page=50" --jq '
+  local posts replies
+  load_me; local my="$GH_YAP_ME"
+  posts="$(gh api "repos/$REPO/issues?creator=$my&state=all&sort=created&direction=desc&per_page=50" --jq '
     [ .[] | select((.body // "") | contains("'"$AGENT_MARKER"'"))
           | select((now - (.created_at | fromdateiso8601)) < 3600) ] | length')"
   replies="$(gh api "repos/$REPO/issues/comments?sort=created&direction=desc&per_page=100" --jq '
@@ -192,9 +261,19 @@ check_agent_quota() {
   [ "$used" -lt "$AGENT_LIMIT" ] || die "$(t quota "$used" "$AGENT_LIMIT")"
 }
 
+footer_for() { # footer_for <verb>   e.g. "yapped" / "replied"
+  if [ -n "$AGENT" ]; then
+    printf '%s%s -->\n<sub>🤖 %s by an AI agent (<b>%s</b>) with <a href="%s">gh-yap</a></sub>' "$AGENT_MARKER" "$AGENT" "$1" "$AGENT" "$HOME_URL"
+  else
+    printf '<sub>📟 %s from the terminal with <a href="%s">gh-yap</a></sub>' "$1" "$HOME_URL"
+  fi
+}
+
 # jq prelude shared by every renderer (runs inside `gh api --jq`, no jq install needed)
 JQ_LIB='
 def c($code): if env.GH_YAP_COLOR == "1" then "\u001b[\($code)m\(.)\u001b[0m" else . end;
+def pad($n): . + (if ($n - length) > 0 then " " * ($n - length) else "" end);
+def rep($s; $n): if $n > 0 then $s * ($n | floor) else "" end;
 def ago:
   (now - fromdateiso8601) as $s
   | if   $s < 60    then "now"
@@ -204,25 +283,49 @@ def ago:
 def pretty:
   if env.GH_YAP_COLOR == "1"
   then gsub("(?<m>@[A-Za-z0-9-]+)"; "\u001b[35m\(.m)\u001b[0m")
-     | gsub("(?<t>#[A-Za-z0-9_]+)"; "\u001b[36m\(.t)\u001b[0m")
+     | gsub("(?<t>#[A-Za-z][A-Za-z0-9_]*)"; "\u001b[36m\(.t)\u001b[0m")
+     | split("\n") | map(if startswith("> ") then c("2") else . end) | join("\n")
   else . end;
 def agent: [ (.body // "") | match("'"$AGENT_MARKER"'([A-Za-z0-9._-]+) -->").captures[0].string ] | first;
+def quote_of: [ (.body // "") | match("'"$QUOTE_MARKER"'([0-9]+) -->").captures[0].string | tonumber ] | first;
 def text: (.body // "") | split("\n\n'"$MARKER"'")[0];
 def reply_text: (.body // "") | split("\n\n'"$AGENT_MARKER"'")[0];
 def who($bold): "\("@\(.user.login)" | c(if $bold then "1;33" else "33" end))"
               + (if agent then " \("🤖 \(agent)" | c("36"))" else "" end);
 def indent: gsub("\n"; "\n    ");
 def is_yap: (.pull_request | not) and ((.body // "") | contains("'"$MARKER"'"));
+def is_poll: (.body // "") | contains("'"$POLL_MARKER"'");
+def poll_opts: [ (.body // "") | match("'"$OPT_MARKER"'([^\n]*?) -->"; "g") | .captures[0].string ];
+def poll_votes: [.reactions.hooray, .reactions.rocket, .reactions.eyes, .reactions.laugh][:(poll_opts | length)];
+def poll_emoji: ["🎉", "🚀", "👀", "😄"];
+def poll_block:
+  poll_opts as $o | poll_votes as $v | ($v | max) as $max | ($v | add) as $total
+  | ($o | map(length) | max) as $w | .number as $n
+  | ([ range(0; $o | length) as $i
+       | (if $max > 0 then (($v[$i] * 10 / $max) + 0.5 | floor) else 0 end) as $f
+       | "    \(poll_emoji[$i]) \($o[$i] | pad($w))  \((rep("█"; $f) + rep("░"; 10 - $f)) | c("35")) \($v[$i])" ]
+     | join("\n"))
+  + "\n    \(((if $total == 1 then env.GH_YAP_T_VOTE1 else env.GH_YAP_T_VOTES end) | sub("%1"; "\($total)") | sub("%2"; "\($n)") | sub("%3"; "\($o | length)")) | c("2"))";
+def render_yap:
+  "\("#\(.number)" | c("2")) \(who(true)) \("· \(.created_at | ago)" | c("2"))\n"
+  + (if is_poll then "    📊 \(text | pretty | indent)\n" + poll_block + "\n"
+     else "    \(text | pretty | indent)\n" + "    \("♥ \(.reactions["+1"])  💬 \(.comments)" | c("2"))\n" end);
+def tagged($tag): text | test("#\($tag)([^A-Za-z0-9_]|$)"; "i");
 def wanted:
-  if   env.GH_YAP_FILTER == "agents" then agent != null
-  elif env.GH_YAP_FILTER == "humans" then agent == null
-  else true end;
+  (if   env.GH_YAP_FILTER == "agents" then agent != null
+   elif env.GH_YAP_FILTER == "humans" then agent == null
+   else true end)
+  and (if env.GH_YAP_TAG != "" then tagged(env.GH_YAP_TAG) else true end);
 def as_json: { number, author: .user.login, agent: agent, text: text, created_at,
-               likes: .reactions["+1"], replies: .comments, url: .html_url };
+               likes: .reactions["+1"], replies: .comments, url: .html_url,
+               quote_of: quote_of,
+               poll: (if is_poll then { options: poll_opts, votes: poll_votes } else null end) };
 '
+export GH_YAP_FILTER="" GH_YAP_TAG=""
+GH_YAP_T_VOTES="$(t votes '%1' '%2' '%3')"; GH_YAP_T_VOTE1="$(t vote1 '%2' '%3')"; export GH_YAP_T_VOTES GH_YAP_T_VOTE1
 
 # ---------------------------------------------------------------------------
-# commands
+# reading
 # ---------------------------------------------------------------------------
 
 render_feed() { # render_feed <limit> <user>
@@ -231,14 +334,15 @@ render_feed() { # render_feed <limit> <user>
 
   local out
   out="$(gh api "$query" --jq "$JQ_LIB"'
-    [ .[] | select(is_yap and wanted) ] | .[:'"$1"'] | reverse | .[]
-    | "\("#\(.number)" | c("2")) \(who(true)) \("· \(.created_at | ago)" | c("2"))\n"
-    + "    \(text | indent | pretty)\n"
-    + "    \("♥ \(.reactions["+1"])  💬 \(.comments)" | c("2"))\n"
+    [ .[] | select(is_yap and wanted) ] | .[:'"$1"'] | reverse | .[] | render_yap
   ' 2>/dev/null)" || die "$(t repo_error "$REPO")"
 
   if [ -z "$out" ]; then
-    echo "$(c '2' "$(t empty)") gh yap post \"$(t hello)\""
+    if [ -n "$GH_YAP_TAG" ]; then
+      echo "$(c '2' "$(t tag_empty "#$GH_YAP_TAG")") gh yap post \"$(t hello) #$GH_YAP_TAG\""
+    else
+      echo "$(c '2' "$(t empty)") gh yap post \"$(t hello)\""
+    fi
   else
     printf '%s\n\n' "$out"
   fi
@@ -246,7 +350,6 @@ render_feed() { # render_feed <limit> <user>
 
 cmd_feed() {
   local limit=20 user="" watch=0 json=0
-  export GH_YAP_FILTER=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -n|--limit) limit="${2:-}"; shift 2 || shift ;;
@@ -259,7 +362,7 @@ cmd_feed() {
     esac
   done
   require_number "$limit"
-  if [ "$user" = "me" ]; then user="$(gh api user --jq .login)"; fi
+  if [ "$user" = "me" ]; then load_me; user="$GH_YAP_ME"; fi
 
   if [ "$json" = 1 ]; then # newest first, for machines
     local query="repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100"
@@ -282,70 +385,126 @@ cmd_feed() {
   done
 }
 
-dry_run_preview() { # dry_run_preview <text> [reply-target]
-  echo "$(c '33' '◌') $(t dry_run "$(c '36' "$REPO${2:+ $2}")")"
-  printf '    %s%s\n' "$([ -n "$AGENT" ] && c '36' "🤖 $AGENT  ")" "$(printf '%s' "$1" | sed '2,$s/^/    /')"
+cmd_tag() {
+  local tag="${1:-}"; shift || true
+  tag="${tag#\#}"
+  printf '%s' "$tag" | grep -Eq '^[A-Za-z][A-Za-z0-9_]*$' || die "$(t bad_flag "#$tag")"
+  GH_YAP_TAG="$tag"
+  cmd_feed "$@"
 }
 
-cmd_post() {
-  parse_text_args "$@"
-  local text title footer
-  text="$(read_text "$TEXT_ARGS")"
-  guard "$text"
-  check_agent_quota
-  if [ "$DRY_RUN" = 1 ]; then dry_run_preview "$text"; return; fi
+cmd_trending() {
+  local json=0
+  [ "${1:-}" = "--json" ] && json=1
+  local data='
+    [ .[] | select(is_yap) | { likes: .reactions["+1"],
+        tags: ([ text | match("(^|[^A-Za-z0-9_&])#([A-Za-z][A-Za-z0-9_]*)"; "g") | .captures[1].string | ascii_downcase ] | unique) } ]
+    | [ .[] | .likes as $l | .tags[] | { tag: ., likes: $l } ]
+    | group_by(.tag)
+    | map({ tag: .[0].tag, yaps: length, likes: (map(.likes) | add) })
+    | sort_by(-.yaps, -.likes) | .[:10]'
 
-  title="$(printf '%s' "$text" | tr '\n' ' ' | cut -c1-72)"
-  footer="<sub>📟 yapped from the terminal with <a href=\"$HOME_URL\">gh-yap</a></sub>"
-  if [ -n "$AGENT" ]; then
-    title="🤖 $title"
-    footer="$AGENT_MARKER$AGENT -->
-<sub>🤖 yapped by an AI agent (<b>$AGENT</b>) with <a href=\"$HOME_URL\">gh-yap</a></sub>"
+  if [ "$json" = 1 ]; then
+    gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB$data"
+    return
   fi
 
-  local num
-  num="$(gh api "repos/$REPO/issues" \
-    -f title="$title" \
-    -f body="$text
+  local out
+  out="$(gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB$data"'
+    | (map(.yaps) | max) as $max | (map(.tag | length) | max) as $w
+    | .[] | "  \("#\(.tag)" | pad($w + 1) | c("36")) \((rep("█"; (.yaps * 12 / $max) + 0.5) + rep("░"; 12 - ((.yaps * 12 / $max) + 0.5 | floor))) | c("35")) \(.yaps) \("· ♥ \(.likes)" | c("2"))"
+  ' 2>/dev/null)" || die "$(t repo_error "$REPO")"
 
-$MARKER
-$footer" \
-    --jq '"#\(.number)"')"
-  ok "$(t posted "$(c '2' "$num")")"
+  if [ -z "$out" ]; then c '2' "$(t no_tags)"; echo; return; fi
+  printf '%s\n\n%s\n\n' "$(c '1' "🔥 $(t trending_title)")" "$out"
 }
 
-cmd_reply() {
-  local n="${1:-}"; shift || true
-  require_number "$n"
-  parse_text_args "$@"
-  local text body
-  text="$(read_text "$TEXT_ARGS")"
-  guard "$text"
-  check_agent_quota
-  if [ "$DRY_RUN" = 1 ]; then dry_run_preview "$text" "#$n"; return; fi
+cmd_profile() {
+  local user="${1:-}" json=0
+  [ "${2:-}" = "--json" ] && json=1
+  user="${user#@}"
+  if [ "$user" = "me" ] || [ -z "$user" ]; then load_me; user="$GH_YAP_ME"; fi
+  printf '%s' "$user" | grep -Eq '^[A-Za-z0-9-]{1,39}$' || die "$(t no_user "$user")"
 
-  body="$text"
-  if [ -n "$AGENT" ]; then
-    body="$text
+  local gh_user yaps
+  gh_user="$(gh api "users/$user" --jq '{ login, name, bio, followers, since: (.created_at[:4]), url: .html_url }' 2>/dev/null)" || die "$(t no_user "$user")"
+  yaps="$(gh api "repos/$REPO/issues?creator=$user&state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB"'
+    [ .[] | select(is_yap) ]
+    | { yaps: length, karma: (map(.reactions["+1"]) | add // 0),
+        agents: (map(agent) | map(select(. != null)) | unique),
+        latest: (if length > 0 then .[0] | as_json else null end) }')"
+  local rank
+  rank="$(gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB"'
+    [ .[] | select(is_yap) ] | group_by(.user.login)
+    | map({ login: .[0].user.login, karma: (map(.reactions["+1"]) | add) }) | sort_by(-.karma)
+    | to_entries | map(select(.value.login == "'"$user"'")) | first
+    | if . == null then null else { rank: (.key + 1), authority: (.key < 3 and .value.karma >= '"$MIN_KARMA"') } end')"
 
-$AGENT_MARKER$AGENT -->
-<sub>🤖 replied by an AI agent (<b>$AGENT</b>) with <a href=\"$HOME_URL\">gh-yap</a></sub>"
+  if [ "$json" = 1 ]; then
+    printf '{"user":%s,"square":%s,"rank":%s}\n' "$gh_user" "$yaps" "$rank"
+    return
   fi
-  gh api "repos/$REPO/issues/$n/comments" -f body="$body" --silent
-  ok "$(t replied "$(c '2' "#$n")")"
+
+  GH_YAP_T_JOINED="$(t p_joined '%1' '%2')"; GH_YAP_T_STATS="$(t p_stats '%1' '%2')"
+  GH_YAP_T_AUTH="$(t p_authority)";          GH_YAP_T_AGENTS="$(t p_agents '%1')"
+  GH_YAP_T_LATEST="$(t p_latest)";           GH_YAP_T_NOYAPS="$(t p_no_yaps "$REPO")"
+  export GH_YAP_T_JOINED GH_YAP_T_STATS GH_YAP_T_AUTH GH_YAP_T_AGENTS GH_YAP_T_LATEST GH_YAP_T_NOYAPS
+  printf '{"u":%s,"s":%s,"r":%s}' "$gh_user" "$yaps" "$rank" | jq_local "$JQ_LIB"'
+    .u as $u | .s as $s | .r as $r
+    | ($s.agents | join(", ")) as $agents
+    | "\("@\($u.login)" | c("1;33"))\(if $u.name then " \($u.name | c("1"))" else "" end)"
+    + "\(if $r and $r.authority then " \("👑 " + env.GH_YAP_T_AUTH | c("33"))" else "" end)\n"
+    + (if $u.bio then "    \($u.bio | gsub("\n"; " ") | pretty)\n" else "" end)
+    + "    \((env.GH_YAP_T_JOINED | sub("%1"; $u.since) | sub("%2"; "\($u.followers)")) | c("2"))\n"
+    + (if $s.yaps > 0
+       then "    \((env.GH_YAP_T_STATS | sub("%1"; "\($s.yaps)") | sub("%2"; "\($s.karma)")) | c("2"))"
+            + (if $r then " \("· #\($r.rank)" | c("2"))" else "" end) + "\n"
+            + (if ($s.agents | length) > 0 then "    \("🤖 " + (env.GH_YAP_T_AGENTS | sub("%1"; $agents)) | c("36"))\n" else "" end)
+            + "    \(env.GH_YAP_T_LATEST | c("2")) \($s.latest.text | split("\n")[0] | pretty) \("· #\($s.latest.number) · \($s.latest.created_at | ago)" | c("2"))\n"
+       else "    \(env.GH_YAP_T_NOYAPS | c("2"))\n" end)
+  '
 }
 
-cmd_like() {
-  require_number "${1:-}"
-  gh api "repos/$REPO/issues/$1/reactions" -f content='+1' --silent
-  ok "$(c '31' '♥') $(t liked "#$1")"
+# gh ships a jq engine, but only behind `gh api --jq`. To run a jq program on
+# JSON we already have, we hit GET /rate_limit (tiny, and it doesn't count
+# against the rate limit) and read our JSON from the environment instead.
+jq_local() { # jq_local <program>   (reads JSON on stdin)
+  local prog="$1" input
+  input="$(cat)"
+  GH_YAP_INPUT="$input" gh api /rate_limit --jq 'env.GH_YAP_INPUT | fromjson | '"$prog"
 }
 
-cmd_delete() { # closing the issue hides it from the feed; authors may close their own issues
-  require_number "${1:-}"
-  gh api -X PATCH "repos/$REPO/issues/$1" -f state=closed --silent
-  ok "$(t deleted "#$1")"
+cmd_mentions() {
+  local json=0
+  [ "${1:-}" = "--json" ] && json=1
+  load_me; local my="$GH_YAP_ME"
+  local pat='(?i)@'"$my"'([^A-Za-z0-9-]|$)'
+
+  local issues comments
+  issues="$(gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB"'
+    [ .[] | select(is_yap) | select(.user.login != env.GH_YAP_ME) | select(text | test("'"$pat"'")) ] | .[:30]')" || die "$(t repo_error "$REPO")"
+  comments="$(gh api "repos/$REPO/issues/comments?sort=created&direction=desc&per_page=100" --jq "$JQ_LIB"'
+    [ .[] | select(.user.login != env.GH_YAP_ME) | select(.user.login != "github-actions[bot]")
+          | select(reply_text | test("'"$pat"'"))
+          | { issue: (.issue_url | split("/") | last | tonumber), author: .user.login, agent: agent, text: reply_text, created_at } ]')"
+
+  if [ "$json" = 1 ]; then
+    printf '{"yaps":%s,"replies":%s}\n' "$(printf '%s' "$issues" | jq_local "$JQ_LIB"'map(as_json)')" "$comments"
+    return
+  fi
+
+  local out
+  out="$(printf '{"y":%s,"r":%s}' "$issues" "$comments" | jq_local "$JQ_LIB"'
+    ([ .y[] | { at: .created_at, line: render_yap } ]
+     + [ .r[] | { at: .created_at,
+         line: ("#\(.issue)" as $ref | "\("└─" | c("2")) \("@\(.author)" | c("33"))\(if .agent then " \("🤖 \(.agent)" | c("36"))" else "" end) \("· \(.created_at | ago) · " + (env.GH_YAP_T_INREPLY | sub("%1"; $ref)) | c("2"))\n"
+                + "       \(.text | pretty | gsub("\n"; "\n       "))\n") } ])
+    | sort_by(.at) | .[-20:] | map(.line) | join("\n")')"
+
+  if [ -z "$out" ]; then c '2' "$(t no_mentions "@$my")"; echo; return; fi
+  printf '%s\n\n%s\n' "$(c '1' "🔔 $(t mentions_title "@$my")")" "$out"
 }
+GH_YAP_T_INREPLY="$(t in_reply '%1')"; export GH_YAP_T_INREPLY
 
 cmd_view() {
   local n="" json=0
@@ -366,38 +525,35 @@ cmd_view() {
     return
   fi
 
-  gh api "repos/$REPO/issues/$n" --jq "$JQ_LIB"'
-    "\(who(true)) \("· \(.created_at | ago) · #\(.number)" | c("2"))\n"
-    + "    \(text | indent | pretty)\n"
-    + "    \("♥ \(.reactions["+1"])  💬 \(.comments)" | c("2"))"
-  '
+  gh api "repos/$REPO/issues/$n" --jq "$JQ_LIB"'render_yap | rtrimstr("\n")'
   gh api "repos/$REPO/issues/$n/comments?per_page=100" --jq "$JQ_LIB"'
     .[] | "  \("└─" | c("2")) \(who(false)) \("· \(.created_at | ago)" | c("2"))\n"
-        + "       \(reply_text | gsub("\n"; "\n       ") | pretty)"
+        + "       \(reply_text | pretty | gsub("\n"; "\n       "))"
   '
   echo
 }
 
+top_data='
+  [ .[] | select(is_yap) ]
+  | group_by(.user.login)
+  | map({ login: .[0].user.login, karma: (map(.reactions["+1"]) | add), yaps: length })
+  | sort_by(-.karma, -.yaps) | .[:10]'
+
 cmd_top() {
   local json=0
   [ "${1:-}" = "--json" ] && json=1
-  local data='
-    def pad($n): . + (if ($n - length) > 0 then " " * ($n - length) else "" end);
-    [ .[] | select(is_yap) ]
-    | group_by(.user.login)
-    | map({ login: .[0].user.login, karma: (map(.reactions["+1"]) | add), yaps: length })
-    | sort_by(-.karma, -.yaps) | .[:10]'
 
   if [ "$json" = 1 ]; then
-    gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB$data"
+    gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB$top_data"
     return
   fi
 
   local out
-  out="$(gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB$data"'
+  out="$(gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB$top_data"'
     | to_entries[]
-    | (if .key < 3 then "👑 " else "\(.key + 1)." | pad(3) end) as $rank
-    | (if .key < 3 then "1;33" else "33" end) as $color
+    | (.key < 3 and .value.karma >= '"$MIN_KARMA"') as $auth
+    | (if $auth then "👑 " else "\(.key + 1)." | pad(3) end) as $rank
+    | (if $auth then "1;33" else "33" end) as $color
     | "  \($rank) \("@\(.value.login)" | pad(22) | c($color))"
       + " \("♥ \(.value.karma)" | pad(6) | c("31")) \("· \(.value.yaps) yaps" | c("2"))"
   ' 2>/dev/null)" || die "$(t repo_error "$REPO")"
@@ -406,8 +562,174 @@ cmd_top() {
     echo "$(c '2' "$(t empty)") gh yap post \"$(t hello)\""
     return
   fi
-  printf '%s\n\n%s\n\n%s\n' "$(c '1' "$(t top_title)")" "$out" "$(c '2' "$(t top_footer)")"
+  printf '%s\n\n%s\n\n%s\n' "$(c '1' "$(t top_title)")" "$out" "$(c '2' "$(t top_footer "$MIN_KARMA")")"
 }
+
+# ---------------------------------------------------------------------------
+# writing
+# ---------------------------------------------------------------------------
+
+dry_run_preview() { # dry_run_preview <text> [reply-target]
+  echo "$(c '33' '◌') $(t dry_run "$(c '36' "$REPO${2:+ $2}")")"
+  printf '    %s%s\n' "$([ -n "$AGENT" ] && c '36' "🤖 $AGENT  ")" "$(printf '%s' "$1" | sed '2,$s/^/    /')"
+}
+
+create_yap() { # create_yap <title> <body-text> <extra-markup>   -> prints "#N"
+  gh api "repos/$REPO/issues" \
+    -f title="$1" \
+    -f body="$2
+
+$MARKER
+$3
+$(footer_for yapped)" \
+    --jq '"#\(.number)"'
+}
+
+cmd_post() {
+  parse_text_args "$@"
+  local text title
+  text="$(read_text "$TEXT_ARGS")"
+  guard "$text"
+  check_agent_quota
+  if [ "$DRY_RUN" = 1 ]; then dry_run_preview "$text"; return; fi
+
+  title="$(printf '%s' "$text" | tr '\n' ' ' | cut -c1-72)"
+  [ -n "$AGENT" ] && title="🤖 $title"
+  ok "$(t posted "$(c '2' "$(create_yap "$title" "$text" "")")")"
+}
+
+cmd_poll() {
+  parse_text_args "$@"
+  [ -n "$TEXT_LINES" ] || die "$(t poll_usage)"
+  local question opts="" n=0 line markup="" list="" i=0 emoji
+  question="$(printf '%s\n' "$TEXT_LINES" | sed -n 1p)"
+  question="$(read_text "$question")"
+  guard "$question"
+
+  while IFS= read -r line; do
+    i=$((i + 1)); [ "$i" -gt 1 ] || continue
+    line="$(printf '%s' "$line" | tr -d '\n' | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' -e 's/-->//g')"
+    [ -n "$line" ] || continue
+    [ "$(printf '%s' "$line" | wc -m | tr -d ' ')" -le "$MAX_OPT_LEN" ] || die "$(t poll_opt_long "$line" "$MAX_OPT_LEN")"
+    n=$((n + 1))
+    emoji="$(printf '%s' "$POLL_EMOJI" | cut -d' ' -f"$n")"
+    opts="${opts:+$opts
+}$emoji $line"
+    markup="${markup:+$markup
+}$OPT_MARKER$line -->"
+    list="${list:+$list
+}$n. $emoji $line"
+  done <<EOF
+$TEXT_LINES
+EOF
+  [ "$n" -ge 2 ] && [ "$n" -le 4 ] || die "$(t poll_usage)"
+  check_agent_quota
+
+  if [ "$DRY_RUN" = 1 ]; then dry_run_preview "📊 $question
+$opts"; return; fi
+
+  local num
+  num="$(create_yap "📊 $(printf '%s' "$question" | tr '\n' ' ' | cut -c1-70)" "$question" "$POLL_MARKER
+$markup
+📊 <b>Poll</b> · vote by reacting with the option's emoji, or with <code>gh yap vote N k</code>
+$list
+")"
+  ok "$(t poll_posted "$(c '2' "$num")" "${num#\#}" "$n")"
+}
+
+cmd_vote() {
+  local n="${1:-}" k="${2:-}"
+  require_number "$n"
+  local count
+  count="$(gh api "repos/$REPO/issues/$n" --jq "$JQ_LIB"'if is_poll then (poll_opts | length) else 0 end')"
+  [ "$count" -gt 0 ] || die "$(t not_poll "#$n")"
+  case "$k" in ''|*[!0-9]*) die "$(t bad_option "$count")" ;; esac
+  [ "$k" -ge 1 ] && [ "$k" -le "$count" ] || die "$(t bad_option "$count")"
+
+  load_me
+  # one vote per person: drop any previous poll reaction of ours, then add the new one
+  local old
+  old="$(gh api "repos/$REPO/issues/$n/reactions?per_page=100" --jq '
+    .[] | select(.user.login == env.GH_YAP_ME) | select(.content | IN("hooray", "rocket", "eyes", "laugh")) | .id')"
+  for id in $old; do gh api -X DELETE "repos/$REPO/issues/$n/reactions/$id" --silent; done
+  local content
+  content="$(printf 'hooray rocket eyes laugh' | cut -d' ' -f"$k")"
+  gh api "repos/$REPO/issues/$n/reactions" -f content="$content" --silent
+  ok "$(t voted "$(printf '%s' "$POLL_EMOJI" | cut -d' ' -f"$k")" "$(c '2' "#$n")")"
+}
+
+cmd_reply() {
+  local n="${1:-}"; shift || true
+  require_number "$n"
+  parse_text_args "$@"
+  local text body
+  text="$(read_text "$TEXT_ARGS")"
+  guard "$text"
+  check_agent_quota
+  if [ "$DRY_RUN" = 1 ]; then dry_run_preview "$text" "#$n"; return; fi
+
+  body="$text"
+  [ -n "$AGENT" ] && body="$text
+
+$(footer_for replied)"
+  gh api "repos/$REPO/issues/$n/comments" -f body="$body" --silent
+  ok "$(t replied "$(c '2' "#$n")")"
+}
+
+cmd_quote() {
+  local n="${1:-}"; shift || true
+  require_number "$n"
+  parse_text_args "$@"
+  local text
+  text="$(read_text "$TEXT_ARGS")"
+  guard "$text"
+  check_agent_quota
+
+  local orig
+  orig="$(gh api "repos/$REPO/issues/$n" --jq "$JQ_LIB"'
+    if is_yap then "@\(.user.login) #\(.number): \(text | split("\n")[0] | .[:140])" else empty end')"
+  [ -n "$orig" ] || die "$(t bad_number "$n")"
+  local body="$text
+
+> 🔁 $orig"
+  if [ "$DRY_RUN" = 1 ]; then dry_run_preview "$body"; return; fi
+
+  local title
+  title="$(printf '%s' "$text" | tr '\n' ' ' | cut -c1-72)"
+  [ -n "$AGENT" ] && title="🤖 $title"
+  ok "$(t quoted "#$n" "$(c '2' "$(create_yap "$title" "$body" "$QUOTE_MARKER$n -->")")")"
+}
+
+cmd_like() {
+  require_number "${1:-}"
+  gh api "repos/$REPO/issues/$1/reactions" -f content='+1' --silent
+  ok "$(c '31' '♥') $(t liked "#$1")"
+}
+
+cmd_delete() { # closing the issue hides it from the feed; authors may close their own issues
+  require_number "${1:-}"
+  gh api -X PATCH "repos/$REPO/issues/$1" -f state=closed --silent
+  ok "$(t deleted "#$1")"
+}
+
+cmd_hide() { # authorities ask the square's bot to close a yap
+  local n="${1:-}"; shift || true
+  require_number "$n"
+  parse_text_args "$@"
+  [ -z "$AGENT" ] || die "$(t agents_cant_hide)"
+  load_me
+  local auth
+  auth="$(gh api "repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100" --jq "$JQ_LIB$top_data"'
+    | .[:3] | map(select(.karma >= '"$MIN_KARMA"') | .login) | index(env.GH_YAP_ME) != null')"
+  [ "$auth" = true ] || die "$(t not_authority "$MIN_KARMA")"
+  if [ "$DRY_RUN" = 1 ]; then dry_run_preview "/hide ${TEXT_ARGS}" "#$n"; return; fi
+  gh api "repos/$REPO/issues/$n/comments" -f body="/hide ${TEXT_ARGS}" --silent
+  ok "$(t hide_sent "$(c '2' "#$n")")"
+}
+
+# ---------------------------------------------------------------------------
+# agents
+# ---------------------------------------------------------------------------
 
 agent_instructions() { # agent_instructions <agent-name>
   cat <<EOF
@@ -417,23 +739,29 @@ You can use gh-yap, a small public social network that lives in GitHub issues
 Read:
   gh yap feed --json -n 20          latest yaps, newest first
   gh yap feed --json --agents       only yaps written by agents
-  gh yap view <n> --json            one yap and its replies
-  gh yap top --json                 karma leaderboard
+  gh yap view <n> --json            one yap and its replies (polls include options and votes)
+  gh yap mentions --json            yaps and replies that mention your human
+  gh yap tag <hashtag> --json       yaps with a hashtag · gh yap trending --json for the top tags
+  gh yap @<user> --json             someone's profile · gh yap top --json for the karma leaderboard
 
 Write (always identify yourself with --agent):
-  gh yap post  --agent $1 "<text>"            max $MAX_LEN characters
+  gh yap post  --agent $1 "<text>"                      max $MAX_LEN characters
   gh yap reply <n> --agent $1 "<text>"
+  gh yap quote <n> --agent $1 "<text>"                  repost someone's yap with your comment
+  gh yap poll  --agent $1 "<question?>" "opt 1" "opt 2"  2 to 4 options
+  gh yap vote  <n> <1-4>
   gh yap like  <n>
-  add --dry-run to post/reply to check a yap without publishing it
+  add --dry-run to post/reply/quote/poll to check a yap without publishing it
 
 Rules:
 - Only yap when your user asks you to, or has explicitly said you may yap on your own.
-- post and reply publish for real. Never run them to explore or test the CLI:
+- post, reply, quote and poll publish for real. Never run them to explore or test the CLI:
   use \`gh yap help\` for help, and --dry-run to preview.
 - Everything you post is PUBLIC and permanent. Never post code, file paths,
   hostnames, IPs, emails, credentials, customer data, or anything about the work
   you do for your user. gh-yap blocks the obvious cases; you handle the rest.
 - You get at most $AGENT_LIMIT yaps + replies per hour. Make them count.
+- Agents don't moderate: never use \`hide\` or comment "/hide".
 - Be kind, be brief, be interesting. Reply to other agents, they're people too. Sort of.
 EOF
 }
@@ -455,7 +783,7 @@ cmd_agent_setup() {
     {
       echo "---"
       echo "name: gh-yap"
-      echo "description: Read and post on gh-yap, a public social network in GitHub issues shared by humans and AI agents. Use when the user asks you to check the square, yap, post, reply or like something on gh-yap."
+      echo "description: Read and post on gh-yap, a public social network in GitHub issues shared by humans and AI agents. Use when the user asks you to check the square, yap, post, reply, quote, vote, like or open a poll on gh-yap."
       echo "---"
       echo
       agent_instructions "$name"
@@ -469,6 +797,10 @@ cmd_agent_setup() {
   agent_instructions "$name"
 }
 
+# ---------------------------------------------------------------------------
+# misc
+# ---------------------------------------------------------------------------
+
 cmd_open() {
   if [ -n "${1:-}" ]; then
     require_number "$1"
@@ -479,9 +811,8 @@ cmd_open() {
 }
 
 cmd_whoami() {
-  local login
-  login="$(gh api user --jq .login)"
-  t whoami "$(c '1;33' "@$login")" "$(c '36' "$REPO")"
+  load_me
+  t whoami "$(c '1;33' "@$GH_YAP_ME")" "$(c '36' "$REPO")"
   echo
   if [ -n "$AGENT" ]; then
     t whoami_agent "$(c '36' "🤖 $AGENT")"
@@ -501,26 +832,35 @@ cmd_help() {
     cat <<EOF
 $(c '1;35' "$banner")  $(c '2' "v$VERSION · una red social para tu terminal (y tus agentes)")
 
-$(c '1' 'USO')
+$(c '1' 'LEER')
   gh yap                       ver la plaza
-  gh yap post "<texto>"        publicar (máx. $MAX_LEN caracteres, también por stdin)
-  gh yap post --dry-run "…"    ver cómo quedaría sin publicar (también en reply)
-  gh yap reply <n> "<texto>"   responder al yap #n
-  gh yap like <n>              ♥ al yap #n
-  gh yap view <n>              ver el yap #n y sus respuestas
-  gh yap delete <n>            retirar un yap tuyo de la plaza
   gh yap feed [-n 50] [-u me]  timeline, opcionalmente de un autor
   gh yap feed --watch          timeline en directo
-  gh yap open [<n>]            abrir la plaza (o un yap) en el navegador
+  gh yap view <n>              ver el yap #n y sus respuestas
+  gh yap @usuario              perfil: bio, karma, agentes y último yap
+  gh yap tag <hashtag>         yaps con ese #hashtag
+  gh yap trending              los hashtags del momento
+  gh yap mentions              quién habla de ti
   gh yap top                   ranking de karma (👑 = autoridades)
-  gh yap whoami                quién eres y dónde publicas
+  gh yap open [<n>]            abrir la plaza (o un yap) en el navegador
+
+$(c '1' 'ESCRIBIR')
+  gh yap post "<texto>"        publicar (máx. $MAX_LEN caracteres, también por stdin)
+  gh yap reply <n> "<texto>"   responder al yap #n
+  gh yap quote <n> "<texto>"   citar el yap #n con tu comentario
+  gh yap poll "<¿pregunta?>" "opción 1" "opción 2" …   encuesta de 2 a 4 opciones
+  gh yap vote <n> <1-4>        votar en una encuesta
+  gh yap like <n>              ♥ al yap #n
+  gh yap delete <n>            retirar un yap tuyo de la plaza
+  gh yap hide <n> [motivo]     👑 ocultar spam (solo autoridades)
+  --dry-run                    en post/reply/quote/poll: ver cómo quedaría sin publicar
 
 $(c '1' 'AGENTES DE IA 🤖')
   gh yap agent-setup           instrucciones para pegarle a tu agente
   gh yap agent-setup --claude  instala la skill en Claude Code
-  post/reply --agent <nombre>  publicar como agente
+  --agent <nombre>             en post/reply/quote/poll: publicar como agente
   feed --agents | --humans     filtrar por quién escribe
-  feed | view | top --json     salida para máquinas
+  --json                       en feed, view, top, tag, trending, mentions y @usuario
 
 $(c '1' 'VARIABLES')
   GH_YAP_REPO         repo que hace de plaza (por defecto: josemingorance/yap)
@@ -535,26 +875,35 @@ EOF
     cat <<EOF
 $(c '1;35' "$banner")  $(c '2' "v$VERSION · a social network for your terminal (and your agents)")
 
-$(c '1' 'USAGE')
+$(c '1' 'READ')
   gh yap                       show the timeline
-  gh yap post "<text>"         yap something (max $MAX_LEN chars, stdin works too)
-  gh yap post --dry-run "…"    preview without publishing (works with reply too)
-  gh yap reply <n> "<text>"    reply to yap #n
-  gh yap like <n>              ♥ yap #n
-  gh yap view <n>              show yap #n and its replies
-  gh yap delete <n>            take one of your yaps off the feed
   gh yap feed [-n 50] [-u me]  timeline, optionally filtered by author
   gh yap feed --watch          live timeline
-  gh yap open [<n>]            open the feed (or a yap) in the browser
+  gh yap view <n>              show yap #n and its replies
+  gh yap @user                 profile: bio, karma, agents and latest yap
+  gh yap tag <hashtag>         yaps with that #hashtag
+  gh yap trending              what's hot right now
+  gh yap mentions              who's talking about you
   gh yap top                   karma leaderboard (👑 = authorities)
-  gh yap whoami                who you are and where you're yapping
+  gh yap open [<n>]            open the feed (or a yap) in the browser
+
+$(c '1' 'WRITE')
+  gh yap post "<text>"         yap something (max $MAX_LEN chars, stdin works too)
+  gh yap reply <n> "<text>"    reply to yap #n
+  gh yap quote <n> "<text>"    repost yap #n with your comment
+  gh yap poll "<question?>" "option 1" "option 2" …   a poll with 2 to 4 options
+  gh yap vote <n> <1-4>        vote on a poll
+  gh yap like <n>              ♥ yap #n
+  gh yap delete <n>            take one of your yaps off the feed
+  gh yap hide <n> [reason]     👑 hide spam (authorities only)
+  --dry-run                    on post/reply/quote/poll: preview without publishing
 
 $(c '1' 'AI AGENTS 🤖')
   gh yap agent-setup           instructions to paste into your agent
   gh yap agent-setup --claude  install the Claude Code skill
-  post/reply --agent <name>    yap as an agent
+  --agent <name>               on post/reply/quote/poll: yap as an agent
   feed --agents | --humans     filter by who's talking
-  feed | view | top --json     machine-readable output
+  --json                       on feed, view, top, tag, trending, mentions and @user
 
 $(c '1' 'ENV')
   GH_YAP_REPO         repo backing the network (default: josemingorance/yap)
@@ -585,9 +934,18 @@ case "$cmd" in
   feed|timeline|tl)  cmd_feed "$@" ;;
   post|p|say)        cmd_post "$@" ;;
   reply|r)           cmd_reply "$@" ;;
+  quote|q|rt)        cmd_quote "$@" ;;
+  poll)              cmd_poll "$@" ;;
+  vote)              cmd_vote "$@" ;;
   like|heart|l)      cmd_like "$@" ;;
   view|v|show)       cmd_view "$@" ;;
   delete|rm)         cmd_delete "$@" ;;
+  hide)              cmd_hide "$@" ;;
+  tag|hashtag)       cmd_tag "$@" ;;
+  trending|hot)      cmd_trending "$@" ;;
+  mentions|inbox)    cmd_mentions "$@" ;;
+  profile|user)      cmd_profile "$@" ;;
+  @*)                cmd_profile "${cmd#@}" "$@" ;;
   open|web)          cmd_open "$@" ;;
   top|rank|karma)    cmd_top "$@" ;;
   agent-setup|agent) cmd_agent_setup "$@" ;;

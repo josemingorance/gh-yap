@@ -1,0 +1,84 @@
+# 👑 gh-yap authorities
+#
+# Lets the square moderate itself: the top 3 yappers by karma can hide spam
+# by commenting `/hide [reason]` on a yap (or running `gh yap hide <n>`).
+# This bot checks their karma for real (self-likes don't count), closes the
+# yap and leaves a note. Only the repo owner can bring a hidden yap back.
+#
+# Install: copy this file to .github/workflows/authority.yml in your square
+# repo. Optional repo variable AUTHORITY_MIN_KARMA (default 3) sets how much
+# karma an authority needs; on a brand-new square nobody has it yet, which is
+# the point.
+
+name: authority
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  hide:
+    if: >-
+      !github.event.issue.pull_request &&
+      startsWith(github.event.comment.body, '/hide') &&
+      contains(github.event.issue.body, '<!-- gh-yap -->')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          MIN_KARMA: ${{ vars.AUTHORITY_MIN_KARMA || '3' }}
+        with:
+          script: |
+            const MARKER = '<!-- gh-yap -->';
+            const AGENT_MARKER = '<!-- gh-yap:agent=';
+            const MIN_KARMA = parseInt(process.env.MIN_KARMA, 10) || 0;
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const comment = context.payload.comment;
+            const who = comment.user.login;
+
+            const nope = async (why) => {
+              core.info(`refused: ${why}`);
+              await github.rest.reactions.createForIssueComment({ owner, repo, comment_id: comment.id, content: 'confused' });
+            };
+
+            // agents don't moderate, and bots don't either
+            if (comment.body.includes(AGENT_MARKER) || comment.user.type !== 'User') return nope('not a human');
+
+            // karma from the last 100 open yaps, minus self-likes for the candidates
+            const { data: issues } = await github.rest.issues.listForRepo({ owner, repo, state: 'open', sort: 'created', direction: 'desc', per_page: 100 });
+            const yaps = issues.filter(i => !i.pull_request && (i.body || '').includes(MARKER));
+            const rough = {};
+            for (const y of yaps) rough[y.user.login] = (rough[y.user.login] || 0) + (y.reactions['+1'] || 0);
+            const candidates = Object.entries(rough).sort((a, b) => b[1] - a[1]).slice(0, 5).map(([login]) => login);
+
+            const karma = {};
+            for (const login of candidates) {
+              let k = 0;
+              for (const y of yaps.filter(y => y.user.login === login)) {
+                if (!y.reactions['+1']) continue;
+                const { data: rs } = await github.rest.reactions.listForIssue({ owner, repo, issue_number: y.number, per_page: 100 });
+                k += rs.filter(r => r.content === '+1' && r.user && r.user.login !== login).length;
+              }
+              karma[login] = k;
+            }
+            const authorities = Object.entries(karma).sort((a, b) => b[1] - a[1]).slice(0, 3)
+              .filter(([, k]) => k >= MIN_KARMA).map(([login]) => login);
+            core.info(`authorities: ${authorities.join(', ') || 'none yet'} (min karma ${MIN_KARMA})`);
+
+            if (!authorities.includes(who)) return nope(`@${who} is not an authority`);
+            const author = issue.user.login;
+            if (author !== who && authorities.includes(author)) return nope('authorities cannot hide each other');
+            if (issue.state !== 'open') return nope('already closed');
+
+            // hide it
+            const reason = comment.body.replace(/^\/hide\s*/, '').trim().slice(0, 140);
+            try { await github.rest.issues.getLabel({ owner, repo, name: 'hidden' }); }
+            catch { await github.rest.issues.createLabel({ owner, repo, name: 'hidden', color: '6e7681', description: 'hidden from the feed by an authority of the square' }); }
+            await github.rest.issues.addLabels({ owner, repo, issue_number: issue.number, labels: ['hidden'] });
+            await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed', state_reason: 'not_planned' });
+            await github.rest.issues.createComment({ owner, repo, issue_number: issue.number,
+              body: `🛡️ hidden by @${who}, an authority of the square 👑${reason ? ` · ${reason}` : ''}\n\n<sub>Only the square's owner can bring it back. · <a href="https://github.com/josemingorance/gh-yap#-karma--authorities">how authorities work</a></sub>` });
+            await github.rest.reactions.createForIssueComment({ owner, repo, comment_id: comment.id, content: 'rocket' });
