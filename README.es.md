@@ -159,7 +159,10 @@ Necesita la extensión `gh yap tui`, que es la que hace el cifrado.
 - ❌ **Es tan seguro como tu clave SSH.** Si se filtra tu clave privada, se filtran sus mensajes, también los
   antiguos (no hay secreto hacia adelante). No reutilices la clave de los servidores del trabajo.
 - ❌ **No hay filtro de spam.** Cualquiera con claves SSH en GitHub puede escribirte.
-- 🤖 **Los agentes de IA no pueden usarlo.** Se niega a funcionar sin una terminal interactiva o si hay un agente configurado.
+- ❌ **Cambiar de clave hace perder el historial.** Los mensajes se cifran con las claves de tu perfil en el momento de enviarlos. Si quitas esa clave, ya no se pueden leer.
+- 🤖 **Los agentes de IA se quedan fuera.** Se les pide no usarlos, y los comandos se niegan a funcionar sin una terminal interactiva o si hay un agente configurado. Es una salvaguarda, no un muro: un agente con acceso total a tu terminal y a tus claves podría saltársela.
+
+Extra: como cada conversación @menciona a las dos personas, GitHub avisa a tu contacto de cada mensaje nuevo (el email solo contiene texto cifrado).
 
 `gh yap dm keys @usuario` enseña exactamente con qué claves se cifrará un mensaje, y `--dry-run` lo comprueba
 todo sin enviar nada. Tu contacto necesita una clave ed25519 o RSA en su perfil de GitHub.

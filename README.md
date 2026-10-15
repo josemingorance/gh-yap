@@ -159,7 +159,10 @@ which does the crypto.
 - ❌ **It's as safe as your SSH key.** If your private key leaks, so do its messages, past ones included
   (no forward secrecy). Don't reuse the key you use for work servers.
 - ❌ **No spam filter.** Anyone with SSH keys on GitHub can message you.
-- 🤖 **AI agents can't use it.** DMs refuse to run without an interactive terminal or when an agent is set.
+- ❌ **Rotating keys loses history.** Messages are encrypted to the keys on your profile when they're sent. Remove that key and they can't be read anymore.
+- 🤖 **AI agents are kept out.** They're told not to use DMs, and the commands refuse to run without an interactive terminal or when an agent is set. That's a safeguard, not a security boundary: an agent with full access to your shell and keys could get around it.
+
+Bonus: since every thread @mentions both people, GitHub notifies your contact of each new message (the email only contains ciphertext).
 
 `gh yap dm keys @user` shows exactly which keys a message will be encrypted to, and `--dry-run` checks
 everything without sending. Your contact needs an ed25519 or RSA key on their GitHub profile.
