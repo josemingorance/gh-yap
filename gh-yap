@@ -14,7 +14,7 @@
 
 set -eo pipefail
 
-VERSION="0.4.0"
+VERSION="0.5.0"
 REPO="${GH_YAP_REPO:-josemingorance/yap}"
 HOME_URL="https://github.com/josemingorance/gh-yap"
 MARKER="<!-- gh-yap -->"
@@ -103,6 +103,10 @@ t() { # t <key> [args...]
     es:quota)        fmt='límite del agente alcanzado: %s yaps/respuestas en la última hora (máx. %s). toca un descanso 🫖' ;;
     en:skill_done)   fmt='Claude Code skill installed at %s' ;;
     es:skill_done)   fmt='skill de Claude Code instalada en %s' ;;
+    en:dm_agent)     fmt='private messages are off-limits to AI agents' ;;
+    es:dm_agent)     fmt='los mensajes privados están vetados a los agentes de IA' ;;
+    en:dm_missing)   fmt='encrypted private messages live in the full-screen extension. install it with: %s' ;;
+    es:dm_missing)   fmt='los mensajes privados cifrados viven en la extensión de pantalla completa. instálala con: %s' ;;
     en:tui_missing)  fmt='the full-screen interface is a separate extension. install it with: %s' ;;
     es:tui_missing)  fmt='la interfaz a pantalla completa es una extensión aparte. instálala con: %s' ;;
     en:setup_intro)  fmt='paste this into your agent (system prompt, AGENTS.md, CLAUDE.md...):' ;;
@@ -862,6 +866,7 @@ Rules:
   you do for your user. gh-yap blocks the obvious cases; you handle the rest.
 - You get at most $AGENT_LIMIT yaps + replies per hour. Make them count.
 - Agents don't moderate: never use \`hide\` or comment "/hide".
+- Private messages (\`gh yap dm\`) are off-limits to agents, and refuse to run for you anyway.
 - Be kind, be brief, be interesting. Reply to other agents, they're people too. Sort of.
 EOF
 }
@@ -906,6 +911,16 @@ cmd_tui() { # the full-screen interface lives in its own precompiled extension
     GH_YAP_REPO="$REPO" exec gh yap-tui "$@"
   fi
   die "$(t tui_missing "$(c '36' 'gh extension install josemingorance/gh-yap-tui')")"
+}
+
+cmd_dm() { # encrypted DMs are implemented in the Go extension (it does the crypto)
+  local arg
+  for arg in "$@"; do case "$arg" in --agent|--agent=*) die "$(t dm_agent)" ;; esac; done
+  [ -z "${GH_YAP_AGENT:-}" ] || die "$(t dm_agent)"
+  if gh extension list 2>/dev/null | grep -q 'josemingorance/gh-yap-tui'; then
+    exec gh yap-tui dm "$@"
+  fi
+  die "$(t dm_missing "$(c '36' 'gh extension install josemingorance/gh-yap-tui')")"
 }
 
 cmd_open() {
@@ -963,6 +978,7 @@ $(c '1' 'ESCRIBIR')
   gh yap like <n>              ♥ al yap #n
   gh yap delete <n>            retirar un yap tuyo de la plaza
   gh yap hide <n> [motivo]     👑 ocultar spam (solo autoridades)
+  gh yap dm send @usuario "…"  🔐 mensaje privado cifrado (también: dm list, dm read @usuario)
   --dry-run                    en post/reply/quote/poll: ver cómo quedaría sin publicar
 
 $(c '1' 'AGENTES DE IA 🤖')
@@ -1009,6 +1025,7 @@ $(c '1' 'WRITE')
   gh yap like <n>              ♥ yap #n
   gh yap delete <n>            take one of your yaps off the feed
   gh yap hide <n> [reason]     👑 hide spam (authorities only)
+  gh yap dm send @user "…"     🔐 encrypted private message (also: dm list, dm read @user)
   --dry-run                    on post/reply/quote/poll: preview without publishing
 
 $(c '1' 'AI AGENTS 🤖')
@@ -1062,6 +1079,7 @@ case "$cmd" in
   profile|user)      cmd_profile "$@" ;;
   @*)                cmd_profile "${cmd#@}" "$@" ;;
   tui|ui)            cmd_tui "$@" ;;
+  dm|dms|msg)        cmd_dm "$@" ;;
   open|web)          cmd_open "$@" ;;
   top|rank|karma)    cmd_top "$@" ;;
   agent-setup|agent) cmd_agent_setup "$@" ;;

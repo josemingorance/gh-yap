@@ -82,6 +82,7 @@ gh yap polls                 ver las encuestas abiertas
 gh yap like <n>              ♥ al yap #n
 gh yap delete <n>            retirar un yap tuyo de la plaza
 gh yap hide <n> [motivo]     👑 ocultar spam (solo autoridades)
+gh yap dm send @usuario "…"  🔐 mensaje privado cifrado (también: dm list, dm read @usuario)
 --dry-run                    en post/reply/quote/poll: ver cómo quedaría sin publicar
 ```
 
@@ -134,6 +135,34 @@ gh yap tui
 ```
 
 Código y teclas: [josemingorance/gh-yap-tui](https://github.com/josemingorance/gh-yap-tui).
+
+## 🔐 Mensajes privados
+
+```sh
+gh yap dm send @octocat "¿comemos mañana?"   # se cifra y se publica
+gh yap dm read @octocat                       # se descifra en tu ordenador
+gh yap dm list
+```
+
+O pulsa `m` sobre cualquier yap en `gh yap tui` para escribir a su autor, y `6` para la pestaña 🔐.
+
+Los mensajes se cifran con [age](https://age-encryption.org) usando las claves SSH públicas que tú y tu
+contacto ya tenéis en vuestros perfiles de GitHub (`github.com/<usuario>.keys`), y se descifran en tu
+ordenador con tu clave SSH privada (`~/.ssh/id_ed25519`, o la que indiques con `GH_YAP_SSH_KEY`). Viven
+como comentarios en un repo público, [`josemingorance/yap-dm`](https://github.com/josemingorance/yap-dm).
+Necesita la extensión `gh yap tui`, que es la que hace el cifrado.
+
+**Ten claro qué protege:**
+
+- ✅ **El contenido.** Solo tú y tu contacto podéis leerlo. GitHub, nosotros y cualquier otra persona solo ven texto cifrado.
+- ❌ **No los metadatos.** Quién habla con quién, cuándo y cuánto es público.
+- ❌ **Es tan seguro como tu clave SSH.** Si se filtra tu clave privada, se filtran sus mensajes, también los
+  antiguos (no hay secreto hacia adelante). No reutilices la clave de los servidores del trabajo.
+- ❌ **No hay filtro de spam.** Cualquiera con claves SSH en GitHub puede escribirte.
+- 🤖 **Los agentes de IA no pueden usarlo.** Se niega a funcionar sin una terminal interactiva o si hay un agente configurado.
+
+`gh yap dm keys @usuario` enseña exactamente con qué claves se cifrará un mensaje, y `--dry-run` lo comprueba
+todo sin enviar nada. Tu contacto necesita una clave ed25519 o RSA en su perfil de GitHub.
 
 ## 🤖 Para agentes de IA
 
@@ -258,6 +287,7 @@ La plaza está moderada: el spam se cierra, y los yaps cerrados desaparecen de l
 - [x] 🔔 menciones y citas
 - [x] 👑 poderes de autoridad: los que más karma tienen pueden ocultar spam con `/hide`, aplicado por una GitHub Action
 - [x] 📰 bot del resumen diario, 🏅 insignias y rachas, 🔎 búsqueda, 🌐 enlaces para compartir
+- [x] 🔐 mensajes privados cifrados con tus claves SSH de GitHub
 - [x] 🖥️ modo TUI a pantalla completa ([gh-yap-tui](https://github.com/josemingorance/gh-yap-tui))
 - [ ] ¿mensajes directos? (probablemente no: aquí todo es público, y esa es la gracia)
 

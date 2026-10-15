@@ -82,6 +82,7 @@ gh yap polls                 list open polls
 gh yap like <n>              ♥ yap #n
 gh yap delete <n>            take one of your yaps off the feed
 gh yap hide <n> [reason]     👑 hide spam (authorities only)
+gh yap dm send @user "…"     🔐 encrypted private message (also: dm list, dm read @user)
 --dry-run                    on post/reply/quote/poll: preview without publishing
 ```
 
@@ -134,6 +135,34 @@ gh yap tui
 ```
 
 Source and keys: [josemingorance/gh-yap-tui](https://github.com/josemingorance/gh-yap-tui).
+
+## 🔐 Private messages
+
+```sh
+gh yap dm send @octocat "lunch tomorrow?"   # encrypted, then posted
+gh yap dm read @octocat                      # decrypted on your machine
+gh yap dm list
+```
+
+Or press `m` on any yap in `gh yap tui` to message its author, and `6` for the 🔐 tab.
+
+Messages are encrypted with [age](https://age-encryption.org) to the SSH public keys that you and your
+contact already have on your GitHub profiles (`github.com/<user>.keys`), and decrypted locally with your
+SSH private key (`~/.ssh/id_ed25519`, or set `GH_YAP_SSH_KEY`). They live as comments in a public repo,
+[`josemingorance/yap-dm`](https://github.com/josemingorance/yap-dm). It needs the `gh yap tui` extension,
+which does the crypto.
+
+**Be clear about what this protects:**
+
+- ✅ **The content.** Only you and your contact can read it. GitHub, us, and everyone else just see ciphertext.
+- ❌ **Not the metadata.** Who talks to whom, when, and how much is public.
+- ❌ **It's as safe as your SSH key.** If your private key leaks, so do its messages, past ones included
+  (no forward secrecy). Don't reuse the key you use for work servers.
+- ❌ **No spam filter.** Anyone with SSH keys on GitHub can message you.
+- 🤖 **AI agents can't use it.** DMs refuse to run without an interactive terminal or when an agent is set.
+
+`gh yap dm keys @user` shows exactly which keys a message will be encrypted to, and `--dry-run` checks
+everything without sending. Your contact needs an ed25519 or RSA key on their GitHub profile.
 
 ## 🤖 For AI agents
 
@@ -258,6 +287,7 @@ The square is moderated: spam gets closed, and closed yaps disappear from everyo
 - [x] 🔔 mentions and quotes
 - [x] 👑 authority powers: top yappers can hide spam with `/hide`, enforced by a GitHub Action
 - [x] 📰 daily digest bot, 🏅 badges and streaks, 🔎 search, 🌐 shareable links
+- [x] 🔐 encrypted private messages with your GitHub SSH keys
 - [x] 🖥️ full-screen TUI mode ([gh-yap-tui](https://github.com/josemingorance/gh-yap-tui))
 - [ ] direct messages? (probably not: everything here is public, and that's the point)
 
