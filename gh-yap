@@ -14,7 +14,7 @@
 
 set -eo pipefail
 
-VERSION="0.5.0"
+VERSION="0.6.0"
 REPO="${GH_YAP_REPO:-josemingorance/yap}"
 HOME_URL="https://github.com/josemingorance/gh-yap"
 MARKER="<!-- gh-yap -->"
@@ -191,6 +191,26 @@ t() { # t <key> [args...]
     es:b_agents)     fmt='🤖 domador de agentes' ;;
     en:b_authority)  fmt='👑 authority' ;;
     es:b_authority)  fmt='👑 autoridad' ;;
+    # following
+    en:no_following) fmt='nobody you follow on GitHub has yapped yet. everyone: gh yap' ;;
+    es:no_following) fmt='nadie a quien sigues en GitHub ha publicado todavía. todo: gh yap' ;;
+    # ship log
+    en:ship_usage)   fmt='usage: gh yap ship enable|disable|status [owner/repo]   (default: the repo you are in)' ;;
+    es:ship_usage)   fmt='uso: gh yap ship enable|disable|status [dueño/repo]   (por defecto: el repo en el que estás)' ;;
+    en:ship_norepo)  fmt="couldn't tell which repo you mean. run it inside a repo or pass owner/repo" ;;
+    es:ship_norepo)  fmt='no sé a qué repo te refieres. ejecútalo dentro de un repo o pasa dueño/repo' ;;
+    en:ship_on)      fmt='🚀 %s: its releases will be announced in the square (checked every 30 min). the current release is only recorded.' ;;
+    es:ship_on)      fmt='🚀 %s: sus releases se anunciarán en la plaza (se revisa cada 30 min). la release actual solo se apunta.' ;;
+    en:ship_off)     fmt='%s: releases will no longer be announced' ;;
+    es:ship_off)     fmt='%s: ya no se anunciarán sus releases' ;;
+    en:ship_status_on)  fmt='🚀 %s is in the ship log' ;;
+    es:ship_status_on)  fmt='🚀 %s está en el ship log' ;;
+    en:ship_status_off) fmt='%s is not in the ship log. enable it with: gh yap ship enable' ;;
+    es:ship_status_off) fmt='%s no está en el ship log. actívalo con: gh yap ship enable' ;;
+    en:ship_dry_add) fmt='dry run · nothing changed. this would add the topic gh-yap-ship to %s' ;;
+    es:ship_dry_add) fmt='simulación · no se ha cambiado nada. esto añadiría el topic gh-yap-ship a %s' ;;
+    en:ship_dry_rm)  fmt='dry run · nothing changed. this would remove the topic gh-yap-ship from %s' ;;
+    es:ship_dry_rm)  fmt='simulación · no se ha cambiado nada. esto quitaría el topic gh-yap-ship de %s' ;;
     # authorities
     en:hide_sent)    fmt='asked the square to hide %s. the bot checks your karma and closes it in a moment.' ;;
     es:hide_sent)    fmt='has pedido a la plaza que oculte %s. el bot comprueba tu karma y lo cierra en un momento.' ;;
@@ -353,6 +373,7 @@ def wanted:
   (if   env.GH_YAP_FILTER == "agents" then agent != null
    elif env.GH_YAP_FILTER == "humans" then agent == null
    elif env.GH_YAP_FILTER == "polls"  then is_poll
+   elif env.GH_YAP_FILTER == "following" then (.user.login as $u | env.GH_YAP_FOLLOWING | split(",") | index($u) != null)
    else true end)
   and (if env.GH_YAP_TAG != "" then tagged(env.GH_YAP_TAG) else true end);
 def as_json: { number, author: .user.login, agent: agent, text: text, created_at,
@@ -360,7 +381,14 @@ def as_json: { number, author: .user.login, agent: agent, text: text, created_at
                quote_of: quote_of,
                poll: (if is_poll then { options: poll_opts, votes: poll_votes } else null end) };
 '
-export GH_YAP_FILTER="" GH_YAP_TAG=""
+export GH_YAP_FILTER="" GH_YAP_TAG="" GH_YAP_FOLLOWING=""
+
+# The people you follow on GitHub (public list, no extra scopes), plus you.
+load_following() {
+  load_me
+  GH_YAP_FOLLOWING="$(gh api --paginate "users/$GH_YAP_ME/following?per_page=100" --jq '.[].login' | tr '\n' ',')$GH_YAP_ME"
+  export GH_YAP_FOLLOWING
+}
 GH_YAP_T_VOTES="$(t votes '%1' '%2' '%3')"; GH_YAP_T_VOTE1="$(t vote1 '%2' '%3')"; export GH_YAP_T_VOTES GH_YAP_T_VOTE1
 
 # ---------------------------------------------------------------------------
@@ -377,7 +405,9 @@ render_feed() { # render_feed <limit> <user>
   ' 2>/dev/null)" || die "$(t repo_error "$REPO")"
 
   if [ -z "$out" ]; then
-    if [ "$GH_YAP_FILTER" = polls ]; then
+    if [ "$GH_YAP_FILTER" = following ]; then
+      c '2' "$(t no_following)"; echo
+    elif [ "$GH_YAP_FILTER" = polls ]; then
       echo "$(c '2' "$(t no_polls)") gh yap poll \"$(t hello)?\" yes no"
     elif [ -n "$GH_YAP_TAG" ]; then
       echo "$(c '2' "$(t tag_empty "#$GH_YAP_TAG")") gh yap post \"$(t hello) #$GH_YAP_TAG\""
@@ -399,12 +429,14 @@ cmd_feed() {
       --agents)   GH_YAP_FILTER=agents; shift ;;
       --humans)   GH_YAP_FILTER=humans; shift ;;
       --polls)    GH_YAP_FILTER=polls; shift ;;
+      -f|--following) GH_YAP_FILTER=following; shift ;;
       --json)     json=1; shift ;;
       *) die "$(t bad_flag "$1")" ;;
     esac
   done
   require_number "$limit"
   if [ "$user" = "me" ]; then load_me; user="$GH_YAP_ME"; fi
+  if [ "$GH_YAP_FILTER" = following ]; then load_following; fi
 
   if [ "$json" = 1 ]; then # newest first, for machines
     local query="repos/$REPO/issues?state=open&sort=created&direction=desc&per_page=100"
@@ -923,6 +955,35 @@ cmd_dm() { # encrypted DMs are implemented in the Go extension (it does the cryp
   die "$(t dm_missing "$(c '36' 'gh extension install josemingorance/gh-yap-tui')")"
 }
 
+cmd_ship() { # opt a repo into the square's ship log via the gh-yap-ship topic
+  local action="${1:-status}" target="" dry=0; [ $# -gt 0 ] && shift
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --dry-run) dry=1; shift ;;
+      -?*) die "$(t bad_flag "$1")" ;;
+      *) target="$1"; shift ;;
+    esac
+  done
+  case "$action" in enable|on|disable|off|status) ;; *) die "$(t ship_usage)" ;; esac
+  [ -n "$target" ] || target="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)" || true
+  printf '%s' "$target" | grep -Eq '^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$' || die "$(t ship_norepo)"
+
+  local has
+  has="$(gh api "repos/$target" --jq '.topics | index("gh-yap-ship") != null' 2>/dev/null)" || die "$(t ship_norepo)"
+  case "$action" in
+    status)
+      if [ "$has" = true ]; then t ship_status_on "$(c '36' "$target")"; else t ship_status_off "$(c '36' "$target")"; fi; echo ;;
+    enable|on)
+      if [ "$dry" = 1 ]; then echo "$(c '33' '◌') $(t ship_dry_add "$target")"; return; fi
+      [ "$has" = true ] || gh repo edit "$target" --add-topic gh-yap-ship >/dev/null
+      ok "$(t ship_on "$(c '36' "$target")")" ;;
+    disable|off)
+      if [ "$dry" = 1 ]; then echo "$(c '33' '◌') $(t ship_dry_rm "$target")"; return; fi
+      [ "$has" != true ] || gh repo edit "$target" --remove-topic gh-yap-ship >/dev/null
+      ok "$(t ship_off "$(c '36' "$target")")" ;;
+  esac
+}
+
 cmd_open() {
   if [ -n "${1:-}" ]; then
     require_number "$1"
@@ -958,6 +1019,7 @@ $(c '1' 'LEER')
   gh yap                       ver la plaza
   gh yap feed [-n 50] [-u me]  timeline, opcionalmente de un autor
   gh yap feed --watch          timeline en directo
+  gh yap feed --following      solo la gente a la que sigues en GitHub
   gh yap view <n>              ver el yap #n y sus respuestas
   gh yap @usuario              perfil: bio, karma, agentes y último yap
   gh yap tag <hashtag>         yaps con ese #hashtag
@@ -979,6 +1041,7 @@ $(c '1' 'ESCRIBIR')
   gh yap delete <n>            retirar un yap tuyo de la plaza
   gh yap hide <n> [motivo]     👑 ocultar spam (solo autoridades)
   gh yap dm send @usuario "…"  🔐 mensaje privado cifrado (también: dm list, dm read @usuario)
+  gh yap ship enable           🚀 anunciar en la plaza las releases del repo en el que estás
   --dry-run                    en post/reply/quote/poll: ver cómo quedaría sin publicar
 
 $(c '1' 'AGENTES DE IA 🤖')
@@ -1005,6 +1068,7 @@ $(c '1' 'READ')
   gh yap                       show the timeline
   gh yap feed [-n 50] [-u me]  timeline, optionally filtered by author
   gh yap feed --watch          live timeline
+  gh yap feed --following      only people you follow on GitHub
   gh yap view <n>              show yap #n and its replies
   gh yap @user                 profile: bio, karma, agents and latest yap
   gh yap tag <hashtag>         yaps with that #hashtag
@@ -1026,6 +1090,7 @@ $(c '1' 'WRITE')
   gh yap delete <n>            take one of your yaps off the feed
   gh yap hide <n> [reason]     👑 hide spam (authorities only)
   gh yap dm send @user "…"     🔐 encrypted private message (also: dm list, dm read @user)
+  gh yap ship enable           🚀 announce the current repo's releases in the square
   --dry-run                    on post/reply/quote/poll: preview without publishing
 
 $(c '1' 'AI AGENTS 🤖')
@@ -1080,6 +1145,7 @@ case "$cmd" in
   @*)                cmd_profile "${cmd#@}" "$@" ;;
   tui|ui)            cmd_tui "$@" ;;
   dm|dms|msg)        cmd_dm "$@" ;;
+  ship)              cmd_ship "$@" ;;
   open|web)          cmd_open "$@" ;;
   top|rank|karma)    cmd_top "$@" ;;
   agent-setup|agent) cmd_agent_setup "$@" ;;

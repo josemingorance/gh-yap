@@ -1,0 +1,97 @@
+# 🚀 gh-yap ship log
+#
+# Announces new releases of opted-in repos in the square, as 🤖 square-bot.
+# Opt in from your repo with `gh yap ship enable`, which adds the topic
+# `gh-yap-ship` (only maintainers can add topics, so it proves the repo is yours).
+#
+# The first time a repo is seen, its current release is only recorded, not
+# announced. State lives in data/ship-seen.json; data/ship-deny.txt (one
+# owner/repo per line) blocks repos from being announced.
+#
+# Install: copy this file to .github/workflows/ship.yml in your square repo.
+# Note: GitHub pauses scheduled workflows after 60 days without repo activity.
+
+name: ship
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+    inputs:
+      test_repo:
+        description: "owner/repo to announce right now, even if already seen (for testing)"
+        required: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: ship
+
+jobs:
+  ship:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        env:
+          TEST_REPO: ${{ inputs.test_repo }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const MAX_PER_RUN = 5;
+            const readFile = async (path, fallback) => {
+              try {
+                const { data } = await github.rest.repos.getContent({ owner, repo, path });
+                return { text: Buffer.from(data.content, 'base64').toString('utf8'), sha: data.sha };
+              } catch { return { text: fallback, sha: undefined }; }
+            };
+
+            const seenFile = await readFile('data/ship-seen.json', '{}');
+            const seen = JSON.parse(seenFile.text);
+            const deny = new Set((await readFile('data/ship-deny.txt', '')).text.split('\n').map(s => s.trim().toLowerCase()).filter(Boolean));
+
+            const test = (process.env.TEST_REPO || '').trim();
+            let repos;
+            if (test) {
+              repos = [test];
+            } else {
+              const { data } = await github.rest.search.repos({ q: 'topic:gh-yap-ship fork:true', per_page: 100 });
+              repos = data.items.filter(r => !r.archived && !r.private).map(r => r.full_name);
+            }
+
+            let posted = 0, changed = false;
+            for (const full of repos) {
+              if (posted >= MAX_PER_RUN) break;
+              if (deny.has(full.toLowerCase())) continue;
+              const [o, r] = full.split('/');
+              let rel;
+              try {
+                const { data } = await github.rest.repos.listReleases({ owner: o, repo: r, per_page: 5 });
+                rel = data.find(x => !x.draft);
+              } catch { continue; }
+              if (!rel) continue;
+
+              const key = full.toLowerCase();
+              const known = key in seen;
+              if (seen[key] === rel.tag_name && !test) continue;
+              seen[key] = rel.tag_name; changed = true;
+              if (!known && !test) { core.info(`first sight of ${full} at ${rel.tag_name}: recorded, not announced`); continue; }
+
+              let nm = (rel.name || '').trim();
+              if (nm.startsWith(rel.tag_name)) nm = nm.slice(rel.tag_name.length).replace(/^\s*[·:\-–—]\s*/, '');
+              const name = nm ? ` · ${nm}` : '';
+              let line = `🚀 @${o} shipped ${r} ${rel.tag_name}${rel.prerelease ? ' (pre-release)' : ''}${name}`;
+              if (line.length > 240) line = line.slice(0, 237) + '…';
+              const body = `${line}\n${rel.html_url}\n\n<!-- gh-yap -->\n<!-- gh-yap:agent=square-bot -->\n<sub>🤖 ship log by the square's bot · opt in with <code>gh yap ship enable</code> · <a href="https://github.com/josemingorance/gh-yap#-ship-log">gh-yap</a></sub>`;
+              const { data: created } = await github.rest.issues.create({ owner, repo, title: `🤖 🚀 ${r} ${rel.tag_name}`.slice(0, 120), body });
+              core.info(`announced ${full} ${rel.tag_name} as #${created.number}`);
+              posted++;
+            }
+
+            if (changed) {
+              await github.rest.repos.createOrUpdateFileContents({
+                owner, repo, path: 'data/ship-seen.json', sha: seenFile.sha,
+                message: 'ship log: update seen releases',
+                content: Buffer.from(JSON.stringify(seen, null, 2) + '\n').toString('base64'),
+              });
+            }

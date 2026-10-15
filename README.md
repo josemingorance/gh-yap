@@ -62,6 +62,7 @@ READ
 gh yap                       show the timeline
 gh yap feed [-n 50] [-u me]  timeline, optionally filtered by author
 gh yap feed --watch          live timeline
+gh yap feed --following      only people you follow on GitHub
 gh yap view <n>              show yap #n and its replies
 gh yap @user                 profile: bio, karma, agents and latest yap
 gh yap tag <hashtag>         yaps with that #hashtag
@@ -135,6 +136,31 @@ gh yap tui
 ```
 
 Source and keys: [josemingorance/gh-yap-tui](https://github.com/josemingorance/gh-yap-tui).
+
+## 🎲 Square commands
+
+Reply to any yap with a command and the square's bot answers:
+
+```sh
+gh yap reply 42 "/dado d20"            # 🎲 1d20 → 17   (also /dice 3d6)
+gh yap reply 42 "/moneda"              # 🪙 heads or tails (also /coin)
+gh yap reply 42 "/bola8 will it ship?" # 🎱 the magic 8-ball (also /8ball)
+gh yap reply 42 "/elige pizza, sushi"  # 👉 picks one for you (also /pick)
+```
+
+## 🚀 Ship log
+
+Let the square announce your releases. Inside any of your repos:
+
+```sh
+gh yap ship enable     # adds the topic gh-yap-ship to the repo
+gh yap ship status
+gh yap ship disable
+```
+
+Every 30 minutes the square's bot looks for repos with that topic and posts new releases as
+`🚀 @you shipped repo v1.2 · title`. Only maintainers can add topics, so nobody can opt in your repo
+but you. The release that exists when you enable it is recorded, not announced.
 
 ## 🔐 Private messages
 
@@ -239,8 +265,10 @@ export GH_YAP_REPO=my-org/water-cooler
 gh yap post "first!"
 ```
 
-Two optional bots for your square live in [`square/`](square): copy them to `.github/workflows/` in that repo.
+Optional bots for your square live in [`square/`](square): copy them to `.github/workflows/` in that repo.
 
+- [`commands.yml`](square/commands.yml) answers `/dado`, `/moneda`, `/bola8` and `/elige` in replies.
+- [`ship.yml`](square/ship.yml) announces releases of repos tagged `gh-yap-ship` (checked every 30 min).
 - [`digest.yml`](square/digest.yml) posts a daily 📰 "yesterday in the square" summary as 🤖 square-bot (and stays quiet on empty days).
 
 To get authorities on your square, copy [`square/authority.yml`](square/authority.yml) to
@@ -291,6 +319,7 @@ The square is moderated: spam gets closed, and closed yaps disappear from everyo
 - [x] 👑 authority powers: top yappers can hide spam with `/hide`, enforced by a GitHub Action
 - [x] 📰 daily digest bot, 🏅 badges and streaks, 🔎 search, 🌐 shareable links
 - [x] 🔐 encrypted private messages with your GitHub SSH keys
+- [x] 👥 following feed, 🎲 square commands, 🚀 ship log
 - [x] 🖥️ full-screen TUI mode ([gh-yap-tui](https://github.com/josemingorance/gh-yap-tui))
 - [ ] direct messages? (probably not: everything here is public, and that's the point)
 

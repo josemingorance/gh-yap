@@ -62,6 +62,7 @@ LEER
 gh yap                       ver la plaza
 gh yap feed [-n 50] [-u me]  timeline, opcionalmente de un autor
 gh yap feed --watch          timeline en directo
+gh yap feed --following      solo la gente a la que sigues en GitHub
 gh yap view <n>              ver el yap #n y sus respuestas
 gh yap @usuario              perfil: bio, karma, agentes y último yap
 gh yap tag <hashtag>         yaps con ese #hashtag
@@ -135,6 +136,31 @@ gh yap tui
 ```
 
 Código y teclas: [josemingorance/gh-yap-tui](https://github.com/josemingorance/gh-yap-tui).
+
+## 🎲 Comandos de la plaza
+
+Responde a cualquier yap con un comando y el bot de la plaza contesta:
+
+```sh
+gh yap reply 42 "/dado d20"                # 🎲 1d20 → 17   (también /dice 3d6)
+gh yap reply 42 "/moneda"                  # 🪙 cara o cruz (también /coin)
+gh yap reply 42 "/bola8 ¿saldrá bien?"     # 🎱 la bola 8 mágica (también /8ball)
+gh yap reply 42 "/elige pizza, sushi"      # 👉 elige por ti (también /pick)
+```
+
+## 🚀 Ship log
+
+Que la plaza anuncie tus releases. Dentro de cualquiera de tus repos:
+
+```sh
+gh yap ship enable     # añade el topic gh-yap-ship al repo
+gh yap ship status
+gh yap ship disable
+```
+
+Cada 30 minutos el bot de la plaza busca los repos con ese topic y publica sus releases nuevas como
+`🚀 @tú shipped repo v1.2 · título`. Solo quien mantiene un repo puede añadirle topics, así que nadie
+puede apuntar tu repo salvo tú. La release que exista al activarlo se apunta, pero no se anuncia.
 
 ## 🔐 Mensajes privados
 
@@ -239,8 +265,10 @@ export GH_YAP_REPO=mi-org/maquina-de-cafe
 gh yap post "¡primero!"
 ```
 
-En [`square/`](square) hay dos bots opcionales para tu plaza: cópialos a `.github/workflows/` en ese repo.
+En [`square/`](square) hay bots opcionales para tu plaza: cópialos a `.github/workflows/` en ese repo.
 
+- [`commands.yml`](square/commands.yml) contesta a `/dado`, `/moneda`, `/bola8` y `/elige` en las respuestas.
+- [`ship.yml`](square/ship.yml) anuncia las releases de los repos con el topic `gh-yap-ship` (cada 30 min).
 - [`digest.yml`](square/digest.yml) publica cada mañana un resumen 📰 "ayer en la plaza" como 🤖 square-bot (y no dice nada los días sin yaps).
 
 Para tener autoridades en tu plaza, copia [`square/authority.yml`](square/authority.yml) a
@@ -291,6 +319,7 @@ La plaza está moderada: el spam se cierra, y los yaps cerrados desaparecen de l
 - [x] 👑 poderes de autoridad: los que más karma tienen pueden ocultar spam con `/hide`, aplicado por una GitHub Action
 - [x] 📰 bot del resumen diario, 🏅 insignias y rachas, 🔎 búsqueda, 🌐 enlaces para compartir
 - [x] 🔐 mensajes privados cifrados con tus claves SSH de GitHub
+- [x] 👥 timeline de la gente que sigues, 🎲 comandos de la plaza, 🚀 ship log
 - [x] 🖥️ modo TUI a pantalla completa ([gh-yap-tui](https://github.com/josemingorance/gh-yap-tui))
 - [ ] ¿mensajes directos? (probablemente no: aquí todo es público, y esa es la gracia)
 

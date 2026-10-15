@@ -1,0 +1,74 @@
+# 🎲 gh-yap square commands
+#
+# Reply to any yap with a command and the square's bot answers:
+#   /dado d20 · /dice 2d6   roll dice (up to 20d1000)
+#   /moneda · /coin         flip a coin
+#   /bola8 · /8ball …       ask the magic 8-ball
+#   /elige a, b, c · /pick  pick one for you
+#
+# Install: copy this file to .github/workflows/commands.yml in your square repo.
+
+name: commands
+on:
+  issue_comment:
+    types: [created]
+
+permissions:
+  issues: write
+
+jobs:
+  answer:
+    if: >-
+      !github.event.issue.pull_request &&
+      github.event.comment.user.type == 'User' &&
+      contains(github.event.issue.body, '<!-- gh-yap -->') &&
+      startsWith(github.event.comment.body, '/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const crypto = require('crypto');
+            const { owner, repo } = context.repo;
+            const issue_number = context.payload.issue.number;
+            const who = context.payload.comment.user.login;
+            const text = context.payload.comment.body.split('\n')[0].trim();
+            const m = text.match(/^\/(dado|dice|moneda|coin|bola8|8ball|elige|pick)\b\s*(.*)$/i);
+            if (!m) return core.info('not a square command');
+            const cmd = m[1].toLowerCase(), arg = m[2].trim();
+
+            // flood cap: stay quiet after 20 bot answers in this yap in the last hour
+            const { data: comments } = await github.rest.issues.listComments({ owner, repo, issue_number, per_page: 100 });
+            const recent = comments.filter(c => c.user.type === 'Bot' && (c.body || '').includes('gh-yap:agent=square-bot')
+              && Date.now() - new Date(c.created_at).getTime() < 3600 * 1000).length;
+            if (recent >= 20) return core.info('flood cap reached');
+
+            const pick = n => crypto.randomInt(n);
+            let answer;
+            if (cmd === 'dado' || cmd === 'dice') {
+              const d = (arg || 'd6').toLowerCase().match(/^(\d{0,2})d(\d{1,4})$/);
+              const n = d ? Math.min(parseInt(d[1] || '1', 10), 20) : 1;
+              const sides = d ? Math.min(Math.max(parseInt(d[2], 10), 2), 1000) : 6;
+              const rolls = Array.from({ length: Math.max(n, 1) }, () => pick(sides) + 1);
+              const total = rolls.reduce((a, b) => a + b, 0);
+              answer = `🎲 ${rolls.length}d${sides} → ${total}${rolls.length > 1 ? ` (${rolls.join(' + ')})` : ''}`;
+            } else if (cmd === 'moneda' || cmd === 'coin') {
+              answer = pick(2) ? '🪙 cara · heads' : '🪙 cruz · tails';
+            } else if (cmd === 'bola8' || cmd === '8ball') {
+              const es = cmd === 'bola8';
+              const yes = es ? ['Sí, sin duda.', 'Todo apunta a que sí.', 'Puedes contar con ello.', 'Despliega tranquilo.']
+                             : ['It is certain.', 'Signs point to yes.', 'You may rely on it.', 'Ship it.'];
+              const maybe = es ? ['Pregúntame después del café.', 'No está claro. Prueba otra vez.', 'Mejor no te lo digo ahora.']
+                               : ['Ask again after coffee.', 'Reply hazy, try again.', 'Better not tell you now.'];
+              const no = es ? ['No cuentes con ello.', 'Mis fuentes dicen que no.', 'Haz rollback ya.']
+                            : ["Don't count on it.", 'My sources say no.', 'Roll it back. Now.'];
+              const all = [...yes, ...yes, ...maybe, ...no];
+              answer = `🎱 ${all[pick(all.length)]}`;
+            } else {
+              const opts = arg.split(/\s*[,|]\s*|\s+(?:o|or)\s+/i).map(s => s.trim()).filter(Boolean).slice(0, 20);
+              if (opts.length < 2) return core.info('need at least 2 options');
+              answer = `👉 ${opts[pick(opts.length)].slice(0, 80)}`;
+            }
+
+            const body = `@${who} ${answer}\n\n<!-- gh-yap:agent=square-bot -->\n<sub>🤖 square-bot · <a href="https://github.com/josemingorance/gh-yap#-square-commands">square commands</a></sub>`;
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
